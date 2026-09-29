@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { dedupeByPlayer, type ScoreEntry } from '../game/highscores';
 import { CLASSES } from '../game/data';
+import { isSupabaseConfigured } from '../lib/supabase';
 import { ClassEmblem } from './ClassEmblem';
 import { HighScoreList } from './HighScoreList';
 
@@ -18,7 +19,7 @@ export function Leaderboard({ scores, activeProfileId }: Props) {
   const heroDef = hero === 'all' ? null : CLASSES.find((c) => c.id === hero) ?? null;
 
   const runs = useMemo(
-    () => dedupeByPlayer(hero === 'all' ? scores : scores.filter((s) => s.classId === hero)),
+    () => isSupabaseConfigured ? dedupeByPlayer(hero === 'all' ? scores : scores.filter((s) => s.classId === hero)) : [],
     [scores, hero]
   );
   const pageCount = Math.ceil(runs.length / pageSize);

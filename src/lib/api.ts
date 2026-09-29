@@ -185,16 +185,29 @@ export async function fetchCloudState(): Promise<{ profiles: PlayerProfile[]; sc
   }
   const matchPageSize = 500;
   const [profilesRes, matchesRes] = await Promise.all([
-    supabase.from('profiles').select('id,username,preferred_class,best_score,best_wave,total_kills,runs,created_at,last_seen'),
+    (async () => {
+      const rows: DbProfile[] = [];
+      for (let offset = 0; ; offset += matchPageSize) {
+        const { data, error } = await supabase!
+          .from('profiles')
+          .select('id,username,preferred_class,best_score,best_wave,total_kills,runs,created_at,last_seen')
+          .order('id', { ascending: true })
+          .range(offset, offset + matchPageSize - 1);
+        if (error) return { data: null, error };
+        const page = (data as DbProfile[] | null) ?? [];
+        rows.push(...page);
+        if (page.length < matchPageSize) break;
+      }
+      return { data: rows, error: null };
+    })(),
     (async () => {
       type MatchRow = Pick<DbMatchResult, 'id' | 'user_id' | 'class_id' | 'score' | 'wave' | 'level' | 'duration_seconds' | 'created_at'> & {
-        profiles: { username: string }[] | null;
       };
       const rows: MatchRow[] = [];
       for (let offset = 0; ; offset += matchPageSize) {
         const { data, error } = await supabase!
           .from('match_results')
-          .select('id,user_id,class_id,score,wave,level,duration_seconds,created_at,profiles(username)')
+          .select('id,user_id,class_id,score,wave,level,duration_seconds,created_at')
           .order('score', { ascending: false })
           .order('id', { ascending: true })
           .range(offset, offset + matchPageSize - 1);
@@ -210,17 +223,24 @@ export async function fetchCloudState(): Promise<{ profiles: PlayerProfile[]; sc
   if (matchesRes.error) return { profiles: [], scores: [], error: matchesRes.error.message };
 
   const profiles = ((profilesRes.data as DbProfile[]) ?? []).map((row) => dbProfileToLocal(row));
-  const scores: ScoreEntry[] = (matchesRes.data ?? []).map((row) => ({
-    name: row.profiles?.[0]?.username ?? 'Wanderer',
-    userId: row.user_id,
-    userName: row.profiles?.[0]?.username ?? 'Wanderer',
-    classId: row.class_id,
-    score: row.score,
-    wave: row.wave,
-    level: row.level,
-    durationSeconds: row.duration_seconds,
-    date: Date.parse(row.created_at) || Date.now(),
-  }));
+  const names = new Map(profiles.map((profile) => [profile.id, profile.name]));
+  const scores: ScoreEntry[] = (matchesRes.data ?? [])
+    .map((row) => {
+      const name = names.get(row.user_id);
+      if (!name) return null;
+      return {
+        name,
+        userId: row.user_id,
+        userName: name,
+        classId: row.class_id,
+        score: row.score,
+        wave: row.wave,
+        level: row.level,
+        durationSeconds: row.duration_seconds,
+        date: Date.parse(row.created_at),
+      };
+    })
+    .filter((score): score is NonNullable<typeof score> => score !== null);
   return { profiles, scores, error: null };
 }
 
