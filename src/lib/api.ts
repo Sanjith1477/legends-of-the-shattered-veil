@@ -183,18 +183,37 @@ export async function fetchCloudState(): Promise<{ profiles: PlayerProfile[]; sc
   if (!isSupabaseConfigured || !supabase) {
     return { profiles: [], scores: [], error: 'Supabase is not configured.' };
   }
+  const matchPageSize = 500;
   const [profilesRes, matchesRes] = await Promise.all([
     supabase.from('profiles').select('id,username,preferred_class,best_score,best_wave,total_kills,runs,created_at,last_seen'),
-    supabase.from('match_results').select('id,user_id,class_id,score,wave,level,duration_seconds,created_at').order('score', { ascending: false }).limit(100),
+    (async () => {
+      type MatchRow = Pick<DbMatchResult, 'id' | 'user_id' | 'class_id' | 'score' | 'wave' | 'level' | 'duration_seconds' | 'created_at'> & {
+        profiles: { username: string }[] | null;
+      };
+      const rows: MatchRow[] = [];
+      for (let offset = 0; ; offset += matchPageSize) {
+        const { data, error } = await supabase!
+          .from('match_results')
+          .select('id,user_id,class_id,score,wave,level,duration_seconds,created_at,profiles(username)')
+          .order('score', { ascending: false })
+          .order('id', { ascending: true })
+          .range(offset, offset + matchPageSize - 1);
+        if (error) return { data: null, error };
+        const page = (data as MatchRow[] | null) ?? [];
+        rows.push(...page);
+        if (page.length < matchPageSize) break;
+      }
+      return { data: rows, error: null };
+    })(),
   ]);
   if (profilesRes.error) return { profiles: [], scores: [], error: profilesRes.error.message };
+  if (matchesRes.error) return { profiles: [], scores: [], error: matchesRes.error.message };
 
   const profiles = ((profilesRes.data as DbProfile[]) ?? []).map((row) => dbProfileToLocal(row));
-  const names = new Map(profiles.map((p) => [p.id, p.name]));
-  const scores: ScoreEntry[] = ((matchesRes.data as DbMatchResult[]) ?? []).map((row) => ({
-    name: names.get(row.user_id) ?? 'Wanderer',
+  const scores: ScoreEntry[] = (matchesRes.data ?? []).map((row) => ({
+    name: row.profiles?.[0]?.username ?? 'Wanderer',
     userId: row.user_id,
-    userName: names.get(row.user_id) ?? 'Wanderer',
+    userName: row.profiles?.[0]?.username ?? 'Wanderer',
     classId: row.class_id,
     score: row.score,
     wave: row.wave,

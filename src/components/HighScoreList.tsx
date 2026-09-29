@@ -8,6 +8,7 @@ interface Props {
   limit?: number;
   highlightScore?: number;
   activeProfileId?: string;
+  rankOffset?: number;
 }
 
 const RANK_COLORS = ['#ffd97a', '#cfd8ea', '#d09a5a'];
@@ -19,7 +20,7 @@ function formatTime(seconds?: number) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function HighScoreList({ scores, limit = 8, highlightScore, activeProfileId }: Props) {
+export function HighScoreList({ scores, limit = 8, highlightScore, activeProfileId, rankOffset = 0 }: Props) {
   // Rank is always determined by score. Time is display information only.
   // Each player appears once with their best score.
   const list = dedupeByPlayer(scores).slice(0, limit);
@@ -41,6 +42,7 @@ export function HighScoreList({ scores, limit = 8, highlightScore, activeProfile
         <span className="text-right text-gold">SCORE</span>
       </div>
       {list.map((s, i) => {
+        const rank = rankOffset + i + 1;
         const cls = CLASSES.find((c) => c.id === s.classId);
         const highlighted =
           (highlightScore !== undefined && s.score === highlightScore) ||
@@ -55,9 +57,9 @@ export function HighScoreList({ scores, limit = 8, highlightScore, activeProfile
           >
             <span
               className="font-display font-bold text-center text-xs"
-              style={{ color: i < 3 ? RANK_COLORS[i] : '#5d6a80' }}
+              style={{ color: rank <= 3 ? RANK_COLORS[rank - 1] : '#5d6a80' }}
             >
-              {i + 1}
+              {rank}
             </span>
             <span className="shrink-0" style={{ color: cls?.color ?? '#e2b45c' }}>
               <ClassEmblem classId={s.classId} size={16} />

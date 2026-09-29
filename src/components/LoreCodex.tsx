@@ -188,6 +188,7 @@ export function LoreCodex({ initialClassId, unlocked, isTouch, onClose }: Props)
                       {arch.rangeTiers.map((tier) => (
                         <div key={tier.threshold} className="p-2 rounded bg-black/35 border border-white/5 text-left">
                           <div className="text-[9px] font-display font-bold text-goldbright">TIER {tier.threshold}: {tier.title}</div>
+                          <div className="text-[9px] font-display font-bold tracking-wide text-parch/55 mt-1">UNLOCKS AT EVOLUTION {tier.threshold}</div>
                           <div className="text-[11px] leading-tight text-parch/70 mt-1">{tier.desc}</div>
                         </div>
                       ))}
