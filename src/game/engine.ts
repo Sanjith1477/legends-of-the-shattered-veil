@@ -207,6 +207,7 @@ interface Enemy {
   atkCd: number; seed: number; elite: boolean; name: string;
   shootT: number; phase: number; windT: number; lungeT: number;
   minionT: number; faceA: number; telegraphed: boolean; launched: boolean;
+  bossAttackWindup: boolean;
   variant: number; dashT: number;
   dead: boolean;
 }
@@ -877,7 +878,7 @@ export class Game {
       case 'siphon':
         return `Lifesteal: +${2 * count} HP/kill`;
       case 'quicksilver':
-        return `Attack Speed: +${((Math.pow(1 / 0.82, count) - 1) * 100).toFixed(0)}%`;
+        return `Attack Speed: +${((Math.pow(1 / 0.8, count) - 1) * 100).toFixed(0)}%`;
       case 'sunward':
         return `Signature Cooldown: -${(Math.max(0, 1 - Math.pow(0.82, count)) * 100).toFixed(0)}%`;
       case 'gilded_hand':
@@ -949,7 +950,7 @@ export class Game {
     this.shopLocked.delete(id);
     if (id.startsWith('expanded_shop_')) {
       const effect = Number(id.split('_').pop()) % 6;
-      if (effect === 0) p.dmgMul *= 1.08;
+      if (effect === 0) p.dmgMul *= 1.09;
       else if (effect === 1) p.attackRate *= 0.92;
       else if (effect === 2) p.speed *= 1.1;
       else if (effect === 3) { p.maxHp += 18; p.hp = Math.min(p.maxHp, p.hp + 18); }
@@ -966,7 +967,7 @@ export class Game {
         this.sfx.play('rune');
         break;
       case 'steel':
-        if (capStackCount(currentStacks + 1, stackCap) > currentStacks) p.dmgMul *= 1.14;
+        if (capStackCount(currentStacks + 1, stackCap) > currentStacks) p.dmgMul *= 1.16;
         this.sfx.play('hit');
         break;
       case 'boots':
@@ -986,7 +987,7 @@ export class Game {
         break;
       case 'whetstone':
         if (capStackCount(currentStacks + 1, stackCap) > currentStacks) {
-          p.critBonus += 0.07;
+          p.critBonus += 0.08;
           p.dmgMul *= 1.08;
         }
         this.sfx.play('crit');
@@ -1227,7 +1228,7 @@ export class Game {
         p.lifesteal += 2;
         break;
       case 'quicksilver':
-        p.attackRate *= 0.82;
+        p.attackRate *= 0.8;
         p.speedTier++;
         break;
       case 'sunward':
@@ -1647,7 +1648,7 @@ export class Game {
       elite,
       name: kind === 'boss' ? this.zone.boss : elite ? ELITE_NAMES[Math.floor(rand(0, ELITE_NAMES.length))] : def.name,
       shootT: rand(1.0, 2.0), phase: rand(0, 5), windT: 0, lungeT: 0,
-      minionT: 6, faceA: 0, telegraphed: false, launched: false,
+      minionT: 6, faceA: 0, telegraphed: false, launched: false, bossAttackWindup: false,
       variant: zoneIdx, dashT: 0,
       dead: false,
     };
@@ -2904,7 +2905,9 @@ export class Game {
       let mx = 0;
       let my = 0;
       const focusSlow = p.focusT > 0 ? 0.32 : 1;
-      const spd = e.speed * (e.frozen > 0 ? 0 : e.slow > 0 ? 0.55 : 1) * focusSlow;
+      const bossHealthRatio = e.kind === 'boss' ? e.hp / e.maxHp : 1;
+      const bossPhaseSpeed = bossHealthRatio < 0.3 ? 1.2 : bossHealthRatio < 0.65 ? 1.1 : 1;
+      const spd = e.speed * (e.kind === 'boss' ? bossPhaseSpeed : 1) * (e.frozen > 0 ? 0 : e.slow > 0 ? 0.55 : 1) * focusSlow;
       if (e.frozen > 0) e.frozen -= dt;
       if (e.slow > 0) e.slow -= dt;
       e.atkCd -= dt;
@@ -3077,9 +3080,11 @@ export class Game {
           e.phase += dt;
           e.minionT -= dt;
           const v = e.variant ?? 0;
+          const healthRatio = e.hp / e.maxHp;
+          const bossPhase = healthRatio < 0.3 ? 3 : healthRatio < 0.65 ? 2 : 1;
           e.faceA = this.bossAimAngle(e, 220, 0.72);
           if (e.minionT <= 0 && this.enemies.length < this.difficulty().activeCap - 3) {
-            e.minionT = this.waveDifficulty.bossMinionGap;
+            e.minionT = this.waveDifficulty.bossMinionGap * (bossPhase === 3 ? 0.8 : bossPhase === 2 ? 0.9 : 1);
             const minionPool: EnemyKind[] = this.wave >= 20
               ? ['husk', 'skitter', 'mage', 'wraith']
               : this.wave >= 10 ? ['husk', 'skitter', 'mage'] : ['husk', 'skitter'];
@@ -3098,15 +3103,29 @@ export class Game {
                 flash: 0, frozen: 0, slow: 0, spawn: 0.4,
                 atkCd: 1, seed: rand(0, TAU), elite: false, name: def.name,
                 shootT: 2, phase: 0, windT: 0, lungeT: 0,
-                minionT: 99, faceA: 0, telegraphed: false, launched: false,
+                minionT: 99, faceA: 0, telegraphed: false, launched: false, bossAttackWindup: false,
                 variant: 0, dashT: 0, dead: false,
               });
               this.burst(e.x + Math.cos(a) * 60, e.y + Math.sin(a) * 60, def.color, 6, 150, 'spark');
             }
           }
           // variant special attacks on shootT
-          e.shootT -= dt;
-          if (e.shootT <= 0) {
+          let launchSpecial = false;
+          if (e.bossAttackWindup) {
+            e.windT -= dt;
+            if (e.windT <= 0) {
+              e.windT = 0;
+              e.bossAttackWindup = false;
+              launchSpecial = true;
+            }
+          } else {
+            e.shootT -= dt * (bossPhase === 3 ? 1.25 : bossPhase === 2 ? 1.1 : 1);
+            if (e.shootT <= 0) {
+              e.bossAttackWindup = true;
+              e.windT = 0.45;
+            }
+          }
+          if (launchSpecial) {
             if (v === 0) {
               // Mizuchi: tidal ring of 10 bolts
               e.shootT = 3.4;
@@ -3195,7 +3214,8 @@ export class Game {
       const dp = Math.hypot(p.x - e.x, p.y - e.y);
       if (interact && dp < e.r + p.r + 2 && e.atkCd <= 0) {
         e.atkCd = Math.max(0.55, (0.9 - this.wave * 0.018) / Math.min(1.25, this.waveDifficulty.dmg));
-        this.damagePlayer(e.dmg, e);
+        const bossCharge = e.kind === 'boss' && e.launched && Math.hypot(e.vx, e.vy) > 450;
+        this.damagePlayer(e.dmg * (bossCharge ? 1.65 : 1), e);
       }
     }
 

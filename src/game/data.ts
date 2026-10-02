@@ -656,7 +656,7 @@ export const POWERS: PowerDef[] = [
     id: 'quicksilver',
     name: 'Quicksilver',
     kicker: 'TEMPO',
-    desc: '+18% attack speed. Keep the pressure relentless.',
+    desc: '+25% attack speed. Keep the pressure relentless.',
     color: '#9ce9ff',
     icon: 'bolt',
     rarity: 'rare', recommended: ['kensei', 'jaguar', 'riftblade'], stacks: 'Multiplicative · repeatable',
@@ -1013,12 +1013,12 @@ function expandedShopRarity(index: number): Rarity {
 
 const EXPANDED_SHOP_ITEMS: ShopItemDef[] = EXPANDED_SHOP_NAMES.map((name, index) => {
   const rarity = expandedShopRarity(index);
-  const cost = rarity === 'common' ? 300 + index * 30
+  const cost = rarity === 'common' ? 80 + index * 20
     : rarity === 'rare' ? 600 + (index - 9) * 180
       : rarity === 'epic' ? 2500 + (index - 20) * 250
         : 6000 + (index - 30) * 500;
   const effect = index % 6;
-  const desc = effect === 0 ? '+8% weapon damage for the rest of this run.' : effect === 1 ? '+8% attack speed for the rest of this run.' : effect === 2 ? '+10% movement speed for the rest of this run.' : effect === 3 ? '+18 max health and restore it now.' : effect === 4 ? '+6% critical chance for the rest of this run.' : '+35% coin value for the rest of this run.';
+  const desc = effect === 0 ? '+9% weapon damage for the rest of this run.' : effect === 1 ? '+9% attack speed for the rest of this run.' : effect === 2 ? '+10% movement speed for the rest of this run.' : effect === 3 ? '+18 max health and restore it now.' : effect === 4 ? '+6% critical chance for the rest of this run.' : '+35% coin value for the rest of this run.';
   return {
     id: `expanded_shop_${index}` as ShopItemId,
     name,
@@ -1039,7 +1039,7 @@ export const SHOP_ITEMS: ShopItemDef[] = [
     name: 'Field Rations',
     kicker: 'ONE USE',
     desc: 'Restore 48 health before the next assault.',
-    cost: 100,
+    cost: 70,
     color: '#9defa4',
     icon: 'heart',
     rarity: 'common', recommended: ['shieldthane', 'tidecaller', 'jaguar'], duration: 'Immediate',
@@ -1049,7 +1049,7 @@ export const SHOP_ITEMS: ShopItemDef[] = [
     name: 'Sun Tonic',
     kicker: 'ONE USE',
     desc: 'Gain Empowered for 18 seconds (+50% damage).',
-    cost: 200,
+    cost: 120,
     color: '#ffd36b',
     icon: 'sun',
     rarity: 'common', recommended: ['kensei', 'jaguar', 'riftblade'], duration: '18 seconds',
@@ -1058,7 +1058,7 @@ export const SHOP_ITEMS: ShopItemDef[] = [
     id: 'steel',
     name: 'Tempered Steel',
     kicker: 'PERMANENT',
-    desc: '+14% weapon damage for the rest of this run.',
+    desc: '+16% weapon damage for the rest of this run.',
     cost: 1200,
     color: '#ff9e88',
     icon: 'blade',
@@ -1069,7 +1069,7 @@ export const SHOP_ITEMS: ShopItemDef[] = [
     name: 'Wayfarer Boots',
     kicker: 'PERMANENT',
     desc: '+10% movement speed for the rest of this run.',
-    cost: 150,
+    cost: 90,
     color: '#78e0d0',
     icon: 'boot',
     rarity: 'common', recommended: ['sandseer', 'riftblade', 'jaguar'], duration: 'Rest of run · stacks',
@@ -1096,7 +1096,7 @@ export const SHOP_ITEMS: ShopItemDef[] = [
   },
   {
     id: 'whetstone', name: 'Obsidian Whetstone', kicker: 'PERMANENT',
-    desc: '+7% critical chance and +8% weapon damage.', cost: 1400, color: '#ff907d', icon: 'blade',
+    desc: '+8% critical chance and +8% weapon damage.', cost: 1400, color: '#ff907d', icon: 'blade',
     rarity: 'rare', recommended: ['kensei', 'jaguar', 'riftblade'], duration: 'Rest of run · stacks',
   },
   {
