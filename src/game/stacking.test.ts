@@ -60,9 +60,17 @@ test('late-game draft reserves and XP power remain valid', () => {
 test('marketplace prices scale with item power and rarity', () => {
   const prices = Object.fromEntries(SHOP_ITEMS.map((item) => [item.id, item.cost]));
   assert.equal(prices.rations, 100);
-  assert.equal(prices.steel, 5000);
-  assert.equal(prices.hourglass, 7000);
-  assert.equal(prices.war_banner, 12000);
+  assert.equal(prices.steel, 1200);
+  assert.equal(prices.hourglass, 3000);
+  assert.equal(prices.war_banner, 6000);
+  const priceRange = (rarity: string) => {
+    const costs = SHOP_ITEMS.filter((item) => item.rarity === rarity).map((item) => item.cost);
+    return [Math.min(...costs), Math.max(...costs)];
+  };
+  assert.deepEqual(priceRange('common'), [100, 540]);
+  assert.deepEqual(priceRange('rare'), [600, 2400]);
+  assert.deepEqual(priceRange('epic'), [2500, 4750]);
+  assert.deepEqual(priceRange('legendary'), [6000, 8000]);
 });
 
 test('late-game progression caps and unlock gaps are fixed', () => {

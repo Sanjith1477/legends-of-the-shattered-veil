@@ -2128,14 +2128,14 @@ export class Game {
     this.shake(e.kind === 'boss' ? 14 : 3.5);
     if (e.elite) this.pushFeed(`You slew ${e.name} (+${gained} score)`, '#ffd97a');
     // drops
-    const coinChance = e.kind === 'boss' ? 1 : 0.65;
+    const coinChance = e.kind === 'boss' ? 1 : 0.8;
     if (Math.random() < coinChance) {
       const nCoins = e.kind === 'boss' ? 8 : e.elite ? 3 : 1;
       for (let i = 0; i < nCoins; i++) {
         this.pickups.push({
           x: e.x + rand(-14, 14), y: e.y + rand(-14, 14),
           vx: rand(-90, 90), vy: rand(-90, 90),
-          kind: 'coin', val: e.kind === 'boss' ? 5 : rand(1, 3) | 0, t: rand(0, TAU),
+          kind: 'coin', val: e.kind === 'boss' ? 8 : rand(2, 4) | 0, t: rand(0, TAU),
         });
       }
     }
