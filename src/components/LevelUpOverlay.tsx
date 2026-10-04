@@ -54,6 +54,7 @@ export function LevelUpOverlay({ data, onChoose, onOpenIndex, onReroll }: Props)
                 onClick={() => onChoose(power.id)}
                 className="choice-card power-choice clip-notch panel p-4 min-h-[210px] flex flex-col items-start group text-left"
                 data-rarity={power.rarity}
+                data-tutorial-card="level-up"
                 style={{ '--power': rarityColor, '--rarity-color': rarityColor } as CSSProperties}
               >
                 <div className="flex w-full items-start justify-between">

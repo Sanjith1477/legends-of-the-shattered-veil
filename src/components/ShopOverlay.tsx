@@ -34,6 +34,8 @@ const EMBERS = [
 
 export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, onContinue }: Props) {
   const lockedCount = data.items.filter((s) => s.locked && !s.sold).length;
+  const tutorialItemIndex = data.items.findIndex(({ item, sold }) => !sold && data.gold >= item.cost);
+  const highlightedItemIndex = tutorialItemIndex >= 0 ? tutorialItemIndex : data.items.findIndex(({ sold }) => !sold);
 
   return (
     <div className="absolute inset-0 z-40 flex items-start justify-center overflow-y-auto bg-abyss/80 px-3 py-4">
@@ -120,6 +122,7 @@ export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, 
                   data-rarity={item.rarity}
                   data-sold={sold ? '1' : '0'}
                   data-locked={locked ? '1' : '0'}
+                  data-tutorial={index === highlightedItemIndex ? 'market-item' : undefined}
                   style={{
                     '--offer': item.color,
                     '--rarity-color': rarityColor,
@@ -179,8 +182,8 @@ export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, 
                       {RARITY_META[item.rarity].label}
                     </span>
                   </div>
-                  <div className="font-display font-bold text-[19px] leading-tight text-parch mt-1">{item.name}</div>
-                  <p className="text-[13px] leading-snug text-faint mt-1.5">{item.desc}</p>
+                  <div data-tutorial-detail={index === highlightedItemIndex ? 'market-name' : undefined} className="font-display font-bold text-[19px] leading-tight text-parch mt-1">{item.name}</div>
+                  <p data-tutorial-detail={index === highlightedItemIndex ? 'market-effect' : undefined} className="text-[13px] leading-snug text-faint mt-1.5">{item.desc}</p>
                   <div className="mt-auto pt-3">
                     {sold ? (
                       <div className="font-display font-black text-sm tracking-[0.16em] text-parch/45">SOLD OUT</div>
@@ -189,6 +192,7 @@ export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, 
                         type="button"
                         disabled={!affordable}
                         onClick={() => onBuy(item.id)}
+                        data-tutorial-detail={index === highlightedItemIndex && affordable ? 'market-buy' : undefined}
                         className="w-full btn-gold clip-notch-sm py-2.5 px-3 text-[13px] font-black tracking-wider flex items-center justify-between disabled:opacity-45 disabled:cursor-not-allowed disabled:saturate-50 min-h-[42px]"
                       >
                         <span className="flex items-center gap-1.5">
@@ -198,7 +202,7 @@ export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, 
                           </svg>
                           {affordable ? 'BUY NOW' : 'NEED GOLD'}
                         </span>
-                        <span className="tabular-nums">{item.cost} G</span>
+                        <span data-tutorial-detail={index === highlightedItemIndex ? 'market-price' : undefined} className="tabular-nums">{item.cost} G</span>
                       </button>
                     )}
                   </div>
@@ -229,6 +233,7 @@ export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, 
               </button>
               <button
                 onClick={onContinue}
+                data-tutorial-detail="market-continue"
                 className="btn-gold clip-notch px-7 py-3 shrink-0 text-sm font-black flex items-center gap-2 min-h-[48px] shadow-[0_0_24px_rgba(226,180,92,0.35)]"
               >
                 FACE WAVE {data.wave + 1}

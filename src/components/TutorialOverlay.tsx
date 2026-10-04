@@ -1,18 +1,17 @@
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { GameState } from '../game/engine';
+
+interface TutorialEvent {
+  id: number;
+  type: 'level-up-opened' | 'skill-selected' | 'market-opened' | 'market-purchased' | 'market-continued';
+}
 
 interface Props {
   isTouch: boolean;
   screen: GameState;
+  event: TutorialEvent | null;
   onClose: () => void;
-  onContinueToMarket: () => void;
-}
-
-interface Step {
-  id: string;
-  title: string;
-  target: string;
-  body: (isTouch: boolean, screen: GameState) => string;
+  onContinue: () => void;
 }
 
 interface Rect {
@@ -22,114 +21,174 @@ interface Rect {
   height: number;
 }
 
+interface Step {
+  title: string;
+  target: string;
+  body: (isTouch: boolean) => string;
+}
+
 const STEPS: Step[] = [
+  { title: 'Your Legend', target: 'legend', body: () => 'Your selected Legend shapes your playstyle. Your name and level are shown here.' },
+  { title: 'Health', target: 'hp', body: () => 'This is your HP. If it reaches 0, your run ends.' },
+  { title: 'Experience', target: 'xp', body: () => 'Defeat enemies to gain XP. Fill this bar to level up and choose a new power.' },
+  { title: 'Waves', target: 'wave', body: () => 'This shows the current wave. Bosses arrive on specific waves; their health bar appears during the fight.' },
   {
-    id: 'legend',
-    title: 'Your Legend',
-    target: 'legend',
-    body: () => 'Your selected Legend shapes your playstyle. Your name and current level are shown here.',
-  },
-  {
-    id: 'hp',
-    title: 'Health',
-    target: 'hp',
-    body: () => 'This is your HP. If it reaches 0, your run ends.',
-  },
-  {
-    id: 'xp',
-    title: 'Experience',
-    target: 'xp',
-    body: () => 'Defeat enemies to gain XP. Fill this bar to level up and choose a new power.',
-  },
-  {
-    id: 'wave',
-    title: 'Waves',
-    target: 'wave',
-    body: () => 'This shows the current wave. Bosses arrive on specific waves; their health bar appears during the fight.',
-  },
-  {
-    id: 'coins',
-    title: 'Coins',
-    target: 'coins',
-    body: () => 'Earn coins as you play. Spend them on upgrades at the Traveling Market between cleared waves.',
-  },
-  {
-    id: 'move',
     title: 'Move',
     target: 'move',
-    body: (isTouch) => isTouch
-      ? 'Drag on the left side of the screen to move. Keep moving to avoid enemy attacks.'
-      : 'Move with WASD or the arrow keys. Keep moving to avoid enemy attacks.',
+    body: (isTouch) => isTouch ? 'Drag on the left side of the screen to move.' : 'Move with WASD or the arrow keys.',
   },
   {
-    id: 'attack',
     title: 'Attack',
     target: 'attack',
     body: (isTouch) => isTouch
-      ? 'Hold the large attack button to strike. Your weapon automatically aims at nearby enemies.'
-      : 'Hold Space or left-click to attack. Your weapon automatically aims at nearby enemies.',
+      ? 'Hold the large attack button to strike. Your weapon aims automatically.'
+      : 'Hold Space or left-click to attack. Your weapon aims automatically.',
   },
   {
-    id: 'skills',
     title: 'Abilities',
     target: 'skills',
     body: (isTouch) => isTouch
-      ? 'Use these buttons for your Legend ability, signature ability, and dash. Cooldowns appear on each button.'
+      ? 'These buttons activate your Legend abilities and dash. Cooldowns appear on each button.'
       : 'These are your active abilities and dash. Their keys and cooldowns are shown here.',
   },
-  {
-    id: 'level-up',
-    title: 'Level-up powers',
-    target: 'level-up',
-    body: (_isTouch, screen) => screen === 'levelup'
-      ? 'Choose one of these powers to strengthen your build.'
-      : 'When you level up, choose one of the offered powers to strengthen your build.',
-  },
-  {
-    id: 'pause',
-    title: 'Pause & settings',
-    target: 'system-controls',
-    body: () => 'Pause your run here, or open Settings to adjust music and sound effects.',
-  },
-  {
-    id: 'marketplace',
-    title: 'Traveling Market',
-    target: 'marketplace',
-    body: (_isTouch, screen) => screen === 'shop'
-      ? 'Buy upgrades here to strengthen your build. Check each item’s cost and effect before purchasing.'
-      : 'After a wave is cleared, the Traveling Market opens between realms. Use your coins there to buy upgrades.',
-  },
+  { title: 'Coins', target: 'coins', body: () => 'Earn coins during a run and spend them on upgrades in the Traveling Market.' },
+  { title: 'Pause & settings', target: 'system-controls', body: () => 'Pause here, or open Settings to adjust music and sound effects.' },
 ];
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const overlaps = (a: Rect, b: Rect) =>
+  a.left < b.left + b.width && a.left + a.width > b.left && a.top < b.top + b.height && a.top + a.height > b.top;
 
-export function TutorialOverlay({ isTouch, screen, onClose, onContinueToMarket }: Props) {
+export function TutorialOverlay({ isTouch, screen, event, onClose, onContinue }: Props) {
   const [index, setIndex] = useState(0);
+  const [mode, setMode] = useState<'steps' | 'waiting-level-up' | 'level-up' | 'waiting-market' | 'market' | 'market-continue'>('steps');
+  const [marketStep, setMarketStep] = useState(0);
+  const [marketPurchased, setMarketPurchased] = useState(false);
   const [anchor, setAnchor] = useState<Rect | null>(null);
-  const [waitingForMarket, setWaitingForMarket] = useState(false);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  const calloutRef = useRef<HTMLElement>(null);
+  const priorMode = useRef<typeof mode>('steps');
+  const priorIndex = useRef(0);
+  const previousEvent = useRef<number | null>(null);
   const step = STEPS[index];
-  const targetName = step.id === 'move' ? (isTouch ? 'move' : 'controls')
-    : step.id === 'attack' ? (isTouch ? 'attack' : 'controls')
-    : step.id === 'skills' ? (isTouch ? 'touch-skills' : 'skills')
-    : step.id === 'level-up' && screen !== 'levelup' ? 'xp'
-    : step.id === 'marketplace' && screen !== 'shop' ? 'coins'
-    : step.target;
+  const targetSelector = mode === 'level-up'
+    ? '[data-tutorial="level-up"]'
+    : mode === 'market-continue'
+      ? '[data-tutorial-detail="market-continue"]'
+      : mode === 'market'
+        ? ['[data-tutorial-detail="market-name"]', '[data-tutorial-detail="market-effect"]', '[data-tutorial-detail="market-price"]', '[data-tutorial-detail="market-buy"]', '[data-tutorial-detail="market-continue"]'][marketStep]
+        : `[data-tutorial="${mode === 'steps' ? step.target : mode === 'waiting-level-up' ? 'xp' : 'wave'}"]`;
+
+  useEffect(() => {
+    if (!event || event.id === previousEvent.current) return;
+    previousEvent.current = event.id;
+    if (event.type === 'level-up-opened' && mode !== 'level-up') {
+      priorMode.current = mode;
+      priorIndex.current = index;
+      setMode('level-up');
+    } else if (event.type === 'skill-selected' && mode === 'level-up' && screen !== 'levelup') {
+      if (priorMode.current === 'waiting-level-up') setMode('waiting-market');
+      else {
+        setMode(priorMode.current);
+        setIndex(priorIndex.current);
+      }
+    } else if (event.type === 'market-opened' && mode !== 'market' && mode !== 'market-continue') {
+      priorMode.current = mode;
+      priorIndex.current = index;
+      setMarketPurchased(false);
+      setMarketStep(0);
+      setMode('market');
+    } else if (event.type === 'market-purchased' && mode === 'market') {
+      setMarketPurchased(true);
+      setMode('market-continue');
+    } else if (event.type === 'market-continued' && (mode === 'market' || mode === 'market-continue')) {
+      if (priorMode.current === 'waiting-market') onClose();
+      else {
+        setMode(priorMode.current);
+        setIndex(priorIndex.current);
+      }
+    }
+  }, [event, mode, index, screen, onClose]);
 
   useLayoutEffect(() => {
     const update = () => {
-      const targets = Array.from(document.querySelectorAll<HTMLElement>(`[data-tutorial="${targetName}"]`))
-        .filter((target) => getComputedStyle(target).display !== 'none')
-        .map((target) => target.getBoundingClientRect())
+      const targetElements = Array.from(document.querySelectorAll<HTMLElement>(targetSelector))
+        .filter((element) => getComputedStyle(element).display !== 'none')
+        .filter((element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0);
+      if (mode === 'market-continue') {
+        targetElements[0]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+      const targets = targetElements
+        .map((element) => element.getBoundingClientRect())
         .filter((rect) => rect.width > 0 && rect.height > 0);
       if (!targets.length) {
         setAnchor(null);
+        setPosition(null);
         return;
       }
       const left = Math.min(...targets.map((rect) => rect.left));
       const top = Math.min(...targets.map((rect) => rect.top));
       const right = Math.max(...targets.map((rect) => rect.right));
       const bottom = Math.max(...targets.map((rect) => rect.bottom));
-      setAnchor({ top, left, width: right - left, height: bottom - top });
+      const targetRect = { top, left, width: right - left, height: bottom - top };
+      setAnchor(targetRect);
+      const contextCard = targetElements[0].closest<HTMLElement>('.choice-card');
+      const cardBounds = contextCard?.getBoundingClientRect();
+
+      const callout = calloutRef.current?.getBoundingClientRect();
+      const width = Math.min(340, window.innerWidth - 24);
+      const height = callout?.height || 180;
+      const gap = 12;
+      const candidatePositions = [
+        { left: targetRect.left - width - gap, top: targetRect.top + targetRect.height / 2 - height / 2 },
+        { left: targetRect.left + targetRect.width + gap, top: targetRect.top + targetRect.height / 2 - height / 2 },
+        { left: targetRect.left + targetRect.width / 2 - width / 2, top: targetRect.top - height - gap },
+        { left: targetRect.left + targetRect.width / 2 - width / 2, top: targetRect.top + targetRect.height + gap },
+      ];
+      if (cardBounds) {
+        candidatePositions.push(
+          { left: cardBounds.left + cardBounds.width / 2 - width / 2, top: cardBounds.top - height - gap },
+          { left: cardBounds.left + cardBounds.width / 2 - width / 2, top: cardBounds.bottom + gap },
+        );
+      }
+      const candidates = candidatePositions.map((candidate) => ({
+        left: clamp(candidate.left, 12, window.innerWidth - width - 12),
+        top: clamp(candidate.top, 12, window.innerHeight - height - 12),
+        width,
+        height,
+      }));
+
+      const blockers = Array.from(document.querySelectorAll<HTMLElement>('[data-tutorial], [data-tutorial-card], [data-tutorial-detail], button'))
+        .filter((element) =>
+          !calloutRef.current?.contains(element) &&
+          !targetElements.includes(element) &&
+          element.dataset.tutorial !== 'marketplace' &&
+          getComputedStyle(element).display !== 'none'
+        )
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0)
+        .map((rect) => ({ top: rect.top, left: rect.left, width: rect.width, height: rect.height }))
+        .filter((rect) => !overlaps(rect, targetRect));
+      const intersectionArea = (a: Rect, b: Rect) => {
+        if (!overlaps(a, b)) return 0;
+        return Math.min(a.left + a.width, b.left + b.width) *
+          Math.min(a.top + a.height, b.top + b.height) -
+          Math.max(a.left, b.left) * Math.max(a.top, b.top);
+      };
+      const scored = candidates.map((candidate) => ({
+        candidate,
+        overlap: intersectionArea(candidate, targetRect) * 1_000_000_000 +
+          (cardBounds ? intersectionArea(candidate, {
+            top: cardBounds.top,
+            left: cardBounds.left,
+            width: cardBounds.width,
+            height: cardBounds.height,
+          }) * 10_000_000 : 0) + blockers.reduce((sum, blocker) => {
+          if (!overlaps(candidate, blocker)) return sum;
+          return sum + intersectionArea(candidate, blocker);
+        }, 0),
+      })).sort((a, b) => a.overlap - b.overlap);
+      setPosition({ top: scored[0].candidate.top, left: scored[0].candidate.left });
     };
 
     update();
@@ -139,13 +198,13 @@ export function TutorialOverlay({ isTouch, screen, onClose, onContinueToMarket }
       window.removeEventListener('resize', update);
       window.removeEventListener('scroll', update, true);
     };
-  }, [targetName, screen]);
+  }, [targetSelector, screen, mode, marketStep]);
 
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.code === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
+    const onKey = (keyboardEvent: KeyboardEvent) => {
+      if (keyboardEvent.code === 'Escape') {
+        keyboardEvent.preventDefault();
+        keyboardEvent.stopPropagation();
         onClose();
       }
     };
@@ -154,70 +213,89 @@ export function TutorialOverlay({ isTouch, screen, onClose, onContinueToMarket }
   }, [onClose]);
 
   const next = () => {
-    if (step.id === 'marketplace' && screen !== 'shop') {
-      setWaitingForMarket(true);
-      onContinueToMarket();
+    if (mode === 'level-up') return;
+    if (mode === 'market-continue') return;
+    if (mode === 'market') {
+      if (marketStep < 3 && document.querySelector('[data-tutorial-detail="market-buy"]')) {
+        setMarketStep((current) => current + 1);
+      } else {
+        setMode('market-continue');
+      }
       return;
     }
-    if (index === STEPS.length - 1) onClose();
-    else setIndex((current) => current + 1);
+    if (mode === 'waiting-level-up') return;
+    if (index < STEPS.length - 1) {
+      setIndex((current) => current + 1);
+      return;
+    }
+    priorMode.current = 'waiting-level-up';
+    setMode('waiting-level-up');
+    onContinue();
   };
-  const calloutWidth = Math.min(360, window.innerWidth - 24);
-  const calloutHeight = 220;
-  const calloutX = anchor
-    ? clamp(anchor.left + anchor.width / 2, calloutWidth / 2 + 12, window.innerWidth - calloutWidth / 2 - 12)
-    : window.innerWidth / 2;
-  const calloutY = anchor
-    ? clamp(
-        anchor.top > window.innerHeight * 0.58 ? anchor.top - calloutHeight - 12 : anchor.top + anchor.height + 12,
-        12,
-        window.innerHeight - calloutHeight - 12
-      )
-    : Math.max(12, window.innerHeight / 2 - calloutHeight / 2);
 
-  if (waitingForMarket && screen !== 'shop') {
-    return (
-      <div className="fixed inset-0 z-[58] pointer-events-none">
-        <div className="fixed top-3 left-1/2 -translate-x-1/2 panel-gold clip-notch-sm px-3 py-2 flex items-center gap-3 pointer-events-auto shadow-lg">
-          <span className="text-[10px] font-bold text-parch">Tutorial resumes when the Traveling Market opens.</span>
-          <button onClick={onClose} className="text-[10px] font-black text-blood hover:text-[#ffaaaa]">SKIP</button>
-        </div>
-      </div>
-    );
-  }
+  const hasMarketItem = Boolean(document.querySelector('[data-tutorial="market-item"]'));
+  const hasAffordableMarketItem = Boolean(document.querySelector('[data-tutorial-detail="market-buy"]'));
+  const message = mode === 'level-up'
+    ? 'Choose ONE power to strengthen your Legend. Select a card to continue.'
+    : mode === 'waiting-level-up'
+      ? 'Keep fighting. When Level Up appears, choose one power to strengthen your Legend.'
+      : mode === 'waiting-market'
+        ? 'Keep playing. When the Traveling Market opens, spend coins here on an upgrade.'
+        : mode === 'market-continue'
+          ? marketPurchased
+            ? 'Your upgrade is ready. Click FACE WAVE to return to your run.'
+            : 'No available item is affordable right now. You can return to the run with FACE WAVE.'
+          : mode === 'market'
+            ? marketStep === 0
+            ? hasMarketItem
+              ? 'Spend coins here to buy upgrades for your run. This is an item available in your Market.'
+              : 'Each Market offers upgrades for your run. There are no unsold items in this Market.'
+            : marketStep === 1
+              ? 'This describes the effect of the selected item.'
+              : marketStep === 2
+                ? 'This is the item’s price. Check that your purse covers it.'
+                : hasAffordableMarketItem
+                  ? 'Click BUY NOW to purchase one upgrade. HOLD carries an item to future Markets.'
+                  : 'No available item is affordable right now. Continue when you are ready.'
+            : step.body(isTouch);
+  const title = mode === 'level-up' ? 'Choose a power'
+    : mode.startsWith('market') ? 'Traveling Market'
+      : mode === 'waiting-level-up' ? 'Level up'
+        : mode === 'waiting-market' ? 'Traveling Market'
+          : step.title;
+  const canAdvance = mode === 'steps' || (mode === 'market' && (
+    !hasAffordableMarketItem || marketStep < 3
+  ));
+  const advanceLabel = mode === 'steps'
+    ? index === STEPS.length - 1 ? 'CONTINUE' : 'NEXT'
+    : mode === 'market' ? 'NEXT' : 'WAIT';
 
   return (
-    <div className="fixed inset-0 z-[58] pointer-events-none" aria-live="polite">
+    <div className="fixed inset-0 z-[80] pointer-events-none" aria-live="polite">
       {anchor && (
         <div
-          className="fixed rounded-md border-2 border-goldbright shadow-[0_0_0_3px_rgba(226,180,92,0.45),0_0_0_9999px_rgba(0,0,0,0.44),0_0_24px_rgba(255,217,122,0.8)]"
+          className="fixed rounded-md border-2 border-goldbright pointer-events-none shadow-[0_0_0_3px_rgba(226,180,92,0.45),0_0_0_9999px_rgba(0,0,0,0.38),0_0_24px_rgba(255,217,122,0.8)]"
           style={{ top: anchor.top - 3, left: anchor.left - 3, width: anchor.width + 6, height: anchor.height + 6 }}
         />
       )}
       <section
-        className="fixed w-[min(360px,calc(100vw-24px))] panel-gold clip-notch p-4 shadow-[0_16px_50px_rgba(0,0,0,0.7)] pointer-events-auto"
-        style={{ top: calloutY, left: calloutX, transform: 'translateX(-50%)' }}
-        aria-label={`Tutorial step ${index + 1}: ${step.title}`}
+        ref={calloutRef}
+        className="fixed w-[min(340px,calc(100vw-24px))] panel-gold clip-notch p-3.5 shadow-[0_16px_50px_rgba(0,0,0,0.85)] pointer-events-auto"
+        style={position ? { top: position.top, left: position.left } : { top: 12, left: 12 }}
+        aria-label={`Tutorial: ${title}`}
       >
-        <div className="font-display text-[9px] tracking-[0.35em] text-gold">
-          HOW TO PLAY · {index + 1}/{STEPS.length}
-        </div>
-        <h2 className="font-display font-black text-xl text-goldbright text-emboss mt-1">{step.title}</h2>
-        <p className="text-[13px] leading-relaxed text-parch/90 mt-2">{step.body(isTouch, screen)}</p>
-        <div className="mt-4 flex items-center justify-between gap-2">
-          <button
-            onClick={() => setIndex((current) => Math.max(0, current - 1))}
-            disabled={index === 0}
-            className="btn-dark clip-notch-sm px-3 py-2 text-[10px] font-bold disabled:opacity-30"
-          >
-            BACK
-          </button>
-          <button onClick={onClose} className="btn-dark clip-notch-sm px-3 py-2 text-[10px] font-bold text-faint hover:text-blood">
-            SKIP
-          </button>
-          <button onClick={next} className="btn-gold clip-notch-sm px-4 py-2 text-[10px] font-black">
-            {index === STEPS.length - 1 ? (screen === 'shop' ? 'FINISH' : 'CONTINUE TO MARKET') : 'NEXT'}
-          </button>
+        <h2 className="font-display font-black text-base text-goldbright text-emboss">{title}</h2>
+        <p className="text-[13px] leading-relaxed text-parch/95 mt-1">{message}</p>
+        <div className="mt-2 flex items-center justify-between gap-2">
+          {mode === 'steps' && index > 0
+            ? <button onClick={() => setIndex((current) => current - 1)} className="btn-dark clip-notch-sm px-3 py-1.5 text-[10px] font-bold">BACK</button>
+            : <span />}
+          <button onClick={onClose} className="btn-dark clip-notch-sm px-3 py-1.5 text-[10px] font-bold text-faint hover:text-blood">SKIP</button>
+          {canAdvance && (
+            <button onClick={next} className="btn-gold clip-notch-sm px-4 py-1.5 text-[10px] font-black">
+              {advanceLabel}
+            </button>
+          )}
         </div>
       </section>
     </div>

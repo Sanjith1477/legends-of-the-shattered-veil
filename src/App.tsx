@@ -54,6 +54,7 @@ import { ShopOverlay } from './components/ShopOverlay';
 import { AccountPanel } from './components/AccountPanel';
 
 const TUTORIAL_VERSION = 2;
+type TutorialEvent = { id: number; type: 'level-up-opened' | 'skill-selected' | 'market-opened' | 'market-purchased' | 'market-continued' };
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -102,7 +103,10 @@ export default function App() {
   const [codexClass, setCodexClass] = useState<string | null>(null);
   const [patchOpen, setPatchOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
-  const tutorialAutoStartedFor = useRef<string | null>(null);
+  const tutorialOpenRef = useRef(false);
+  const tutorialEventId = useRef(0);
+  const [tutorialEvent, setTutorialEvent] = useState<TutorialEvent | null>(null);
+  const tutorialAutoStartedFor = useRef<{ profileId: string; game: Game } | null>(null);
   const tutorialResumeAfterClose = useRef(false);
   const [notes, setNotes] = useState<PatchNote[]>(PATCH_NOTES);
   const [seenVersion, setSeenVersion] = useState<string | null>(null);
@@ -122,6 +126,11 @@ export default function App() {
       bus: busRef.current,
       onState: (s, st) => {
         setScreen(s);
+        if (tutorialOpenRef.current && s === 'levelup') {
+          setTutorialEvent({ id: ++tutorialEventId.current, type: 'level-up-opened' });
+        } else if (tutorialOpenRef.current && s === 'shop') {
+          setTutorialEvent({ id: ++tutorialEventId.current, type: 'market-opened' });
+        }
         if (st) {
           setStats(st);
           if (s === 'over') {
@@ -261,8 +270,6 @@ export default function App() {
   // Per-profile discovery, tutorial version, and patch-note state.
   useEffect(() => {
     if (!activeProfile) return;
-    let cancelled = false;
-    let tutorialTimer: number | undefined;
     const local = loadDiscovery(activeProfile.id);
     setDiscovery({
       powers: Array.from(new Set([...local.powers, ...((activeProfile.discoveredPowers ?? []) as PowerId[])])),
@@ -278,23 +285,24 @@ export default function App() {
       console.error('[AETHERIA] could not read tutorial version.');
     }
     if (tutorialVersion < TUTORIAL_VERSION) {
-      tutorialTimer = window.setTimeout(() => {
-        if (cancelled || tutorialAutoStartedFor.current === activeProfile.id) return;
-        tutorialAutoStartedFor.current = activeProfile.id;
+      const game = gameRef.current;
+      if (game && (
+        tutorialAutoStartedFor.current?.profileId !== activeProfile.id ||
+        tutorialAutoStartedFor.current.game !== game
+      )) {
+        tutorialAutoStartedFor.current = { profileId: activeProfile.id, game };
         startGame(activeProfile.preferredClass);
         tutorialResumeAfterClose.current = true;
-        gameRef.current?.setPaused(true);
+        tutorialOpenRef.current = true;
+        setTutorialEvent(null);
+        game.setPaused(true);
         setTutorialOpen(true);
-      });
+      }
       // first-ever launch: don't stack the patch notes on top of the tutorial
       if (seen === null) markVersionSeen(activeProfile.id, currentVersion);
     } else if (seen !== null && compareVersions(currentVersion, seen) > 0) {
       setPatchOpen(true);
     }
-    return () => {
-      cancelled = true;
-      if (tutorialTimer !== undefined) window.clearTimeout(tutorialTimer);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProfile?.id, currentVersion]);
 
@@ -338,6 +346,7 @@ export default function App() {
     setSeenVersion(currentVersion);
   };
   const closeTutorial = () => {
+    tutorialOpenRef.current = false;
     setTutorialOpen(false);
     if (tutorialResumeAfterClose.current) {
       tutorialResumeAfterClose.current = false;
@@ -454,17 +463,28 @@ export default function App() {
 
   const openTutorial = () => {
     setSettingsOpen(false);
+    setTutorialEvent(null);
     if (screen === 'menu' && activeProfile) {
       startGame(activeProfile.preferredClass);
       tutorialResumeAfterClose.current = true;
       gameRef.current?.setPaused(true);
+    } else if (screen === 'paused') {
+      tutorialResumeAfterClose.current = true;
     }
+    tutorialOpenRef.current = true;
     setTutorialOpen(true);
   };
 
-  const continueTutorialToMarket = () => {
+  const continueTutorial = () => {
     tutorialResumeAfterClose.current = false;
     gameRef.current?.setPaused(false);
+  };
+
+  const continueFromTutorialMarket = () => {
+    if (tutorialOpenRef.current) {
+      setTutorialEvent({ id: ++tutorialEventId.current, type: 'market-continued' });
+    }
+    gameRef.current?.continueFromShop();
   };
 
   const toggleMute = () => {
@@ -542,6 +562,9 @@ export default function App() {
 
   const choosePower = (id: PowerId) => {
     const chosen = gameRef.current?.choosePower(id);
+    if (chosen && tutorialOpenRef.current) {
+      setTutorialEvent({ id: ++tutorialEventId.current, type: 'skill-selected' });
+    }
     if (chosen && activeProfile) {
       setDiscovery(discoverPower(activeProfile.id, id));
       if (cloud) void markCloudDiscovery('power', id);
@@ -550,6 +573,9 @@ export default function App() {
 
   const buyShopItem = (id: ShopItemId) => {
     const bought = gameRef.current?.buyShopItem(id);
+    if (bought && tutorialOpenRef.current) {
+      setTutorialEvent({ id: ++tutorialEventId.current, type: 'market-purchased' });
+    }
     if (bought && activeProfile) {
       setDiscovery(discoverShopItem(activeProfile.id, id));
       if (cloud) void markCloudDiscovery('shop', id);
@@ -745,7 +771,7 @@ export default function App() {
           onToggleLock={(id) => gameRef.current?.toggleLockShopItem(id)}
           onOpenIndex={() => setIndexTab('shop')}
           onReroll={() => gameRef.current?.rerollShop()}
-          onContinue={() => gameRef.current?.continueFromShop()}
+          onContinue={continueFromTutorialMarket}
         />
       )}
 
@@ -833,7 +859,13 @@ export default function App() {
       )}
 
       {tutorialOpen && ['playing', 'paused', 'levelup', 'shop'].includes(screen) && activeProfile && !accountPanelOpen && (
-        <TutorialOverlay isTouch={isTouch} screen={screen} onClose={closeTutorial} onContinueToMarket={continueTutorialToMarket} />
+        <TutorialOverlay
+          isTouch={isTouch}
+          screen={screen}
+          event={tutorialEvent}
+          onClose={closeTutorial}
+          onContinue={continueTutorial}
+        />
       )}
 
       {screen === 'menu' && accountPanelOpen && (
@@ -857,7 +889,7 @@ export default function App() {
           totalStats={pauseData.totalBuildStats}
           marketplacePowerups={pauseData.marketplacePowerups}
           onOpenSettings={() => setSettingsOpen(true)}
-          onOpenTutorial={() => setTutorialOpen(true)}
+          onOpenTutorial={openTutorial}
           onResume={() => gameRef.current?.setPaused(false)}
           onRestart={restart}
           onMenu={toMenu}
