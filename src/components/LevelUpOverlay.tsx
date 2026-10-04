@@ -45,7 +45,7 @@ export function LevelUpOverlay({ data, onChoose, onOpenIndex, onReroll }: Props)
           />
         </div>
 
-        <div className="grid sm:grid-cols-3 gap-3 sm:gap-4 mt-5 text-left">
+        <div data-tutorial="level-up" className="grid sm:grid-cols-3 gap-3 sm:gap-4 mt-5 text-left">
           {data.choices.map((power, index) => {
             const rarityColor = RARITY_META[power.rarity].color;
             return (

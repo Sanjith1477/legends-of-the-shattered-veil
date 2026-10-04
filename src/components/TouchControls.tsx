@@ -156,6 +156,7 @@ export function TouchControls({ gameRef, bus }: Props) {
       {/* joystick zone (left half, clear of the top HUD) */}
       <div
         ref={zoneRef}
+        data-tutorial="move"
         className="absolute left-0 bottom-0 pointer-events-auto touchbtn"
         style={{ width: '50%', height: vp.landscape ? '78%' : '62%' }}
         onPointerDown={onDown}
@@ -198,6 +199,7 @@ export function TouchControls({ gameRef, bus }: Props) {
         {/* Main Attack button at center anchor */}
         <button
           ref={attackRef}
+          data-tutorial="attack"
           className={`${btn} btn-gold absolute inset-0 z-10`}
           style={{
             width: attackSize,
@@ -230,6 +232,7 @@ export function TouchControls({ gameRef, bus }: Props) {
 
         {/* 1. Legacy Ability (Q) - top satellite */}
         <div
+          data-tutorial="touch-skills"
           className="absolute z-20 pointer-events-auto"
           style={{
             width: actionSize,
@@ -274,6 +277,7 @@ export function TouchControls({ gameRef, bus }: Props) {
 
         {/* 2. Signature Ability (E) - upper-left satellite */}
         <div
+          data-tutorial="touch-skills"
           className="absolute z-20 pointer-events-auto"
           style={{
             width: actionSize,
@@ -316,6 +320,7 @@ export function TouchControls({ gameRef, bus }: Props) {
 
         {/* 3. Dash - bottom-left satellite */}
         <div
+          data-tutorial="touch-skills"
           className="absolute z-20 pointer-events-auto"
           style={{
             width: actionSize,

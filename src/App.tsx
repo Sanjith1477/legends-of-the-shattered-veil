@@ -53,6 +53,8 @@ import { LevelUpOverlay } from './components/LevelUpOverlay';
 import { ShopOverlay } from './components/ShopOverlay';
 import { AccountPanel } from './components/AccountPanel';
 
+const TUTORIAL_VERSION = 2;
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<Game | null>(null);
@@ -100,6 +102,8 @@ export default function App() {
   const [codexClass, setCodexClass] = useState<string | null>(null);
   const [patchOpen, setPatchOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(false);
+  const tutorialAutoStartedFor = useRef<string | null>(null);
+  const tutorialResumeAfterClose = useRef(false);
   const [notes, setNotes] = useState<PatchNote[]>(PATCH_NOTES);
   const [seenVersion, setSeenVersion] = useState<string | null>(null);
   const [events, setEvents] = useState<WorldEvent[]>([]);
@@ -254,9 +258,11 @@ export default function App() {
     });
   }, [cloud]);
 
-  // per-profile "seen version", tutorial first-run, and auto-open of new patch notes
+  // Per-profile discovery, tutorial version, and patch-note state.
   useEffect(() => {
     if (!activeProfile) return;
+    let cancelled = false;
+    let tutorialTimer: number | undefined;
     const local = loadDiscovery(activeProfile.id);
     setDiscovery({
       powers: Array.from(new Set([...local.powers, ...((activeProfile.discoveredPowers ?? []) as PowerId[])])),
@@ -264,31 +270,31 @@ export default function App() {
     });
     const seen = lastSeenVersion(activeProfile.id);
     setSeenVersion(seen);
-    let tutorialDone = false;
+    let tutorialVersion = 0;
     try {
-      tutorialDone = localStorage.getItem(`aetheria-tutorial-${activeProfile.id}`) === 'done';
+      const storedVersion = Number(localStorage.getItem(`aetheria-tutorial-version-${activeProfile.id}`));
+      if (Number.isFinite(storedVersion)) tutorialVersion = storedVersion;
     } catch {
-      /* ignore */
+      console.error('[AETHERIA] could not read tutorial version.');
     }
-    // A profile that already has progress is a returning player: never re-show the
-    // tutorial just because this browser/device has no local "seen" flag yet.
-    const hasProgress =
-      (activeProfile.bestWave ?? 0) > 0 || (activeProfile.bestScore ?? 0) > 0 || (activeProfile.runs ?? 0) > 0;
-    if (!tutorialDone && hasProgress) {
-      tutorialDone = true;
-      try {
-        localStorage.setItem(`aetheria-tutorial-${activeProfile.id}`, 'done');
-      } catch {
-        /* ignore */
-      }
-    }
-    if (!tutorialDone) {
-      setTutorialOpen(true);
+    if (tutorialVersion < TUTORIAL_VERSION) {
+      tutorialTimer = window.setTimeout(() => {
+        if (cancelled || tutorialAutoStartedFor.current === activeProfile.id) return;
+        tutorialAutoStartedFor.current = activeProfile.id;
+        startGame(activeProfile.preferredClass);
+        tutorialResumeAfterClose.current = true;
+        gameRef.current?.setPaused(true);
+        setTutorialOpen(true);
+      });
       // first-ever launch: don't stack the patch notes on top of the tutorial
       if (seen === null) markVersionSeen(activeProfile.id, currentVersion);
     } else if (seen !== null && compareVersions(currentVersion, seen) > 0) {
       setPatchOpen(true);
     }
+    return () => {
+      cancelled = true;
+      if (tutorialTimer !== undefined) window.clearTimeout(tutorialTimer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProfile?.id, currentVersion]);
 
@@ -333,10 +339,14 @@ export default function App() {
   };
   const closeTutorial = () => {
     setTutorialOpen(false);
+    if (tutorialResumeAfterClose.current) {
+      tutorialResumeAfterClose.current = false;
+      gameRef.current?.setPaused(false);
+    }
     try {
-      if (activeProfile) localStorage.setItem(`aetheria-tutorial-${activeProfile.id}`, 'done');
-    } catch {
-      /* ignore */
+      if (activeProfile) localStorage.setItem(`aetheria-tutorial-version-${activeProfile.id}`, String(TUTORIAL_VERSION));
+    } catch (error) {
+      console.error('[AETHERIA] could not save tutorial version:', error);
     }
   };
   const changePassword = async (current: string, next: string, confirm: string) => {
@@ -440,6 +450,21 @@ export default function App() {
     setSaveState('idle');
     setSaveError('');
     g.start(classId, activeProfile.name, activeProfile.id, activeProfile.name);
+  };
+
+  const openTutorial = () => {
+    setSettingsOpen(false);
+    if (screen === 'menu' && activeProfile) {
+      startGame(activeProfile.preferredClass);
+      tutorialResumeAfterClose.current = true;
+      gameRef.current?.setPaused(true);
+    }
+    setTutorialOpen(true);
+  };
+
+  const continueTutorialToMarket = () => {
+    tutorialResumeAfterClose.current = false;
+    gameRef.current?.setPaused(false);
   };
 
   const toggleMute = () => {
@@ -707,7 +732,7 @@ export default function App() {
         />
       )}
 
-      {screen === 'playing' && isTouch && <TouchControls gameRef={gameRef} bus={busRef.current} />}
+      {(screen === 'playing' || (screen === 'paused' && tutorialOpen)) && isTouch && <TouchControls gameRef={gameRef} bus={busRef.current} />}
 
       {screen === 'levelup' && levelUp && (
         <LevelUpOverlay data={levelUp} onChoose={choosePower} onOpenIndex={() => setIndexTab('powers')} onReroll={() => gameRef.current?.rerollPowers()} />
@@ -736,7 +761,7 @@ export default function App() {
           events={events}
           onOpenProfile={() => setProfileOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
-          onOpenTutorial={() => setTutorialOpen(true)}
+          onOpenTutorial={openTutorial}
           onOpenCodex={(id) => setCodexClass(id)}
           onOpenIndex={() => setIndexTab('powers')}
           onOpenPatchNotes={openPatchNotes}
@@ -772,10 +797,7 @@ export default function App() {
                   setSettingsOpen(false);
                   setAccountPanelOpen(true);
                 },
-                onOpenTutorial: () => {
-                  setSettingsOpen(false);
-                  setTutorialOpen(true);
-                },
+                onOpenTutorial: openTutorial,
                 onOpenPatchNotes: () => {
                   setSettingsOpen(false);
                   openPatchNotes();
@@ -810,8 +832,8 @@ export default function App() {
         <PatchNotesOverlay notes={notes} currentVersion={currentVersion} lastSeen={seenVersion} onClose={closePatchNotes} />
       )}
 
-      {tutorialOpen && (screen === 'menu' || (screen === 'paused' && !isTouch)) && activeProfile && !accountPanelOpen && (
-        <TutorialOverlay isTouch={isTouch} onClose={closeTutorial} />
+      {tutorialOpen && ['playing', 'paused', 'levelup', 'shop'].includes(screen) && activeProfile && !accountPanelOpen && (
+        <TutorialOverlay isTouch={isTouch} screen={screen} onClose={closeTutorial} onContinueToMarket={continueTutorialToMarket} />
       )}
 
       {screen === 'menu' && accountPanelOpen && (
@@ -827,7 +849,7 @@ export default function App() {
         />
       )}
 
-      {screen === 'paused' && pauseStats && pauseData && (
+      {screen === 'paused' && !tutorialOpen && pauseStats && pauseData && (
         <PauseOverlay
           wave={pauseStats.wave}
           score={pauseStats.score}

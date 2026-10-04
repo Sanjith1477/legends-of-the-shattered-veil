@@ -210,6 +210,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
             boxShadow: '0 5px 18px rgba(0,0,0,0.28), 0 0 16px rgba(70,200,220,0.08)',
             ...(isTouch ? { position: 'absolute', left: 4, top: 77 } : {}),
           }}
+          data-tutorial="legend"
         >
           <div className="flex items-center gap-1.5 sm:gap-2">
             <span
@@ -237,7 +238,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
                 />
                 {(isTouch || !compact) && <span ref={classRef} className="text-[10px] text-cyan-200/90 font-bold tracking-wide truncate" />}
               </div>
-              <div className="bar-shell clip-notch-sm relative mt-1" style={{ height: compact ? 11 : 14 }}>
+              <div data-tutorial="hp" className="bar-shell clip-notch-sm relative mt-1" style={{ height: compact ? 11 : 14 }}>
                 <div ref={hpFill} className="bar-fill" style={{ width: '100%', background: 'linear-gradient(180deg,#ff8f96,#e54855)' }} />
                 <span
                   ref={hpText}
@@ -245,7 +246,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
                   style={{ fontSize: compact ? 8 : 10, textShadow: '0 1px 2px rgba(0,0,0,0.9)' }}
                 />
               </div>
-              <div className="bar-shell clip-notch-sm mt-1 bg-black/70 border border-cyan-300/25" style={{ height: compact ? 5 : 6 }}>
+              <div data-tutorial="xp" className="bar-shell clip-notch-sm mt-1 bg-black/70 border border-cyan-300/25" style={{ height: compact ? 5 : 6 }}>
                 <div ref={xpFill} className="bar-fill" style={{ width: '0%', background: 'linear-gradient(90deg,#63e6d1,#16bfc4)' }} />
               </div>
             </div>
@@ -265,6 +266,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
         {/* zone / wave / announce / boss */}
         <div className="flex-1 flex flex-col items-center min-w-0 px-1">
           <div
+            data-tutorial="wave"
             className="panel-gold clip-notch flex items-center justify-center gap-1 sm:gap-2 font-bold tracking-wider flex-wrap"
             style={{
               padding: compact ? '3px 6px' : '6px 15px',
@@ -296,7 +298,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
               marginTop: isTouch ? (vp.h < 430 ? 136 : 148) : compact ? 10 : 24,
             }}
           />
-          <div ref={bossWrap} className="mt-1" style={{ display: 'none', width: compact ? '68vw' : 'min(440px, 66vw)' }}>
+          <div ref={bossWrap} data-tutorial="boss" className="mt-1" style={{ display: 'none', width: compact ? '68vw' : 'min(440px, 66vw)' }}>
             <div className="flex justify-between font-bold tracking-wider mb-0.5 px-0.5" style={{ fontSize: compact ? 8.5 : 10 }}>
               <span ref={bossName} className="text-[#ff9a9a] truncate" />
               <span className="text-faint shrink-0">WORLD BOSS</span>
@@ -308,7 +310,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
         </div>
 
         {/* score frame + system controls */}
-        <div className="flex items-start gap-1 shrink-0 z-10">
+        <div data-tutorial="system-controls" className="flex items-start gap-1 shrink-0 z-10">
           <div
             className="panel-gold clip-notch text-right"
             style={{
@@ -330,6 +332,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
             </div>
             {/* Coins & Timer Badge: higher contrast, bold text, glowing coin icon */}
             <div
+              data-tutorial="coins"
               className="flex items-center justify-end gap-2 mt-1.5 px-2 py-0.5 rounded bg-black/45 border border-gold/30 shadow-inner"
               style={{ fontSize: compact ? 11 : 13 }}
             >
@@ -453,9 +456,9 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
 
         {/* desktop skill bar */}
         {!isTouch && (
-          <div className="flex flex-col items-end gap-1.5 shrink-0">
+          <div data-tutorial="controls" className="flex flex-col items-end gap-1.5 shrink-0">
             <div ref={legActive} className="font-display text-[10px] tracking-[0.2em] text-goldbright text-emboss px-2 py-1 panel-gold clip-notch-sm" style={{ display: 'none' }} />
-            <div className="flex items-end gap-3 panel-gold clip-notch px-3.5 py-3 bg-[rgba(5,14,24,0.94)]">
+            <div data-tutorial="skills" className="flex items-end gap-3 panel-gold clip-notch px-3.5 py-3 bg-[rgba(5,14,24,0.94)]">
               <div className="flex flex-col items-center gap-1">
                 <div className="relative panel-gold clip-notch-sm flex items-center justify-center overflow-hidden" style={{ width: 66, height: 66, boxShadow: '0 0 14px rgba(215,173,255,0.25)' }}>
                   <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#d7adff" strokeWidth="2" strokeLinejoin="round">
