@@ -1,4 +1,4 @@
-# Realms of Aetheria — Project Handoff
+# Legends of the Shattered Veil — Project Handoff
 
 Read this first, then read only the specific files you need to edit. Do not bulk-read the whole project.
 

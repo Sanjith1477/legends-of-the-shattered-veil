@@ -1,6 +1,6 @@
-# Realms of Aetheria
+# Legends of the Shattered Veil
 
-**A pocket MMORPG in your browser.** Top-down canvas action-RPG: pick a legend, survive endless waves, draft powers on level-up, trade at the traveling market, and slay realm bosses — solo offline or with cloud accounts and a live leaderboard.
+**Eight Legends. Five Realms. One Shattered World.** Top-down canvas action-RPG: pick a legend, survive endless waves, draft powers on level-up, trade at the traveling market, and slay realm bosses — solo offline or with cloud accounts and a live leaderboard.
 
 ![Title screen](docs/screenshots/title-screen.png)
 

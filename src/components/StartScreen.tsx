@@ -87,7 +87,7 @@ export function StartScreen({
         <header className="w-full max-w-6xl flex items-center justify-between gap-2 anim-fade-up">
           <div className="flex items-center gap-2 text-gold min-w-0">
             <ClassEmblem classId="sandseer" size={26} />
-            <span className="font-display font-bold tracking-[0.3em] text-xs sm:text-sm text-emboss hidden sm:block">AETHERIA</span>
+            <span className="font-display font-bold tracking-[0.3em] text-xs sm:text-sm text-emboss hidden sm:block">SHATTERED VEIL</span>
             <button
               onClick={onOpenPatchNotes}
               className="panel clip-notch-sm px-2 py-1 text-[10px] font-bold tracking-wider text-faint hover:text-goldbright relative"
@@ -135,8 +135,8 @@ export function StartScreen({
 
         {/* logo */}
         <div className="text-center mt-3 sm:mt-5 anim-fade-up" style={{ animationDelay: '60ms' }}>
-          <h1 className="font-display font-black text-gold text-emboss leading-none text-[clamp(30px,7vw,68px)] tracking-[0.06em]">REALMS OF AETHERIA</h1>
-          <div className="mt-2 text-[10px] sm:text-xs tracking-[0.42em] text-faint font-bold uppercase">Eight legends · five cultures · 120 waves</div>
+          <h1 className="font-display font-black text-gold text-emboss leading-tight text-[clamp(20px,6vw,56px)] tracking-[0.02em]">LEGENDS OF THE SHATTERED VEIL</h1>
+          <div className="mt-2 text-[10px] sm:text-xs tracking-[0.08em] text-faint font-bold">Eight Legends. Five Realms. One Shattered World.</div>
         </div>
 
         <main className="w-full max-w-6xl grid lg:grid-cols-[1.04fr_0.96fr] gap-3 sm:gap-4 mt-4 sm:mt-6">
