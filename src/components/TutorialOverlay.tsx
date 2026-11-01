@@ -280,7 +280,7 @@ export function TutorialOverlay({ isTouch, screen, event, onClose, onContinue }:
       )}
       <section
         ref={calloutRef}
-        className="fixed w-[min(340px,calc(100vw-24px))] panel-gold clip-notch p-3.5 shadow-[0_16px_50px_rgba(0,0,0,0.85)] pointer-events-auto"
+        className="fixed w-[min(340px,calc(100vw-24px))] panel-gold clip-notch p-3.5 shadow-[0_16px_50px_rgba(0,0,0,0.85)] pointer-events-auto anim-overlay-enter"
         style={position ? { top: position.top, left: position.left } : { top: 12, left: 12 }}
         aria-label={`Tutorial: ${title}`}
       >

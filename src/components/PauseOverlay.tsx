@@ -18,7 +18,7 @@ interface Props {
 function ReferenceDesktopPauseLayout({ wave, score, skills, totalStats, marketplacePowerups, onOpenSettings, onOpenTutorial, onResume, onRestart, onMenu }: Props) {
 
   return (
-    <div className="absolute inset-0 z-40 bg-abyss/75 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div className="absolute inset-0 z-40 bg-abyss/75 flex items-center justify-center p-3 sm:p-4 overflow-y-auto anim-overlay-enter">
       <div className="reference-pause panel-gold clip-notch w-full max-w-5xl p-4 sm:p-5 anim-fade-up my-auto">
         <div className="text-center mb-4">
           <div className="font-display text-[10px] tracking-[0.5em] text-faint">THE REALMS WAIT</div>
@@ -92,7 +92,7 @@ export function PauseOverlay(props: Props) {
   }
 
   return (
-    <div className="absolute inset-0 z-40 bg-abyss/75 flex items-center justify-center p-2.5 overflow-y-auto">
+    <div className="absolute inset-0 z-40 bg-abyss/75 flex items-center justify-center p-2.5 overflow-y-auto anim-overlay-enter">
       <div className="panel-gold clip-notch w-full max-w-3xl p-3 sm:p-4 anim-fade-up my-auto">
         <div className="text-center">
           <div className="font-display text-[10px] tracking-[0.5em] text-faint">THE REALMS WAIT</div>

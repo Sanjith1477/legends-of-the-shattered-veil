@@ -61,3 +61,16 @@ The simulation lives in `src/game/engine.ts`; see `CONTINUE.md` for the architec
 ## Install as an app (PWA)
 
 Open the deployed site on your phone → *Add to Home Screen*. The service worker caches the whole game for offline play.
+
+## Android app
+
+The Android app bundles the production game locally. Build and sync its assets with:
+
+```bash
+npm run sync:android
+npm run open:android
+```
+
+In Android Studio, use **Build → Build Bundle(s) / APK(s) → Build APK(s)** for a debug APK. Alternatively, from the project root run `cd android` and `.\gradlew.bat assembleDebug` on Windows; the APK is written to `android\app\build\outputs\apk\debug\app-debug.apk`.
+
+Use Android Studio with a supported JDK (17 or 21 recommended) and the Android SDK. The Gradle wrapper in this project does not support Java 25.

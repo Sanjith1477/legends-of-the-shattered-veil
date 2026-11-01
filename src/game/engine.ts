@@ -352,6 +352,8 @@ export class Game {
   private raf = 0;
   private last = 0;
   private running = true;
+  private reducedMotion = false;
+  private motionPreference!: MediaQueryList;
   private viewW = 800;
   private viewH = 600;
   private dpr = 1;
@@ -371,6 +373,7 @@ export class Game {
   private profileId = 'local-hero';
   private profileName = 'Wanderer';
   private enemies: Enemy[] = [];
+  private bossVisualPhases = new WeakMap<Enemy, number>();
   private shots: Shot[] = [];
   private pickups: Pickup[] = [];
   private parts: Particle[] = [];
@@ -427,6 +430,9 @@ export class Game {
     this.canvas = canvas;
     this.opts = opts;
     this.ctx = canvas.getContext('2d')!;
+    this.motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+    this.reducedMotion = this.motionPreference.matches;
+    this.motionPreference.addEventListener('change', this.onMotionPreferenceChange);
     for (let i = 0; i < 300; i++) {
       this.specks.push({ x: rand(0, ARENA_W), y: rand(0, ARENA_H), a: rand(0.02, 0.08) });
     }
@@ -456,6 +462,7 @@ export class Game {
     this.music.destroy();
     cancelAnimationFrame(this.raf);
     this.ro?.disconnect();
+    this.motionPreference.removeEventListener('change', this.onMotionPreferenceChange);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
@@ -1504,8 +1511,14 @@ export class Game {
   }
 
   private shake(v: number) {
+    if (this.reducedMotion) return;
     this.cam.shake = Math.min(22, this.cam.shake + v);
   }
+
+  private onMotionPreferenceChange = (event: MediaQueryListEvent) => {
+    this.reducedMotion = event.matches;
+    if (event.matches) this.cam.shake = 0;
+  };
 
   private glow(color: string): HTMLCanvasElement {
     let g = this.glowCache.get(color);
@@ -1543,6 +1556,7 @@ export class Game {
   }
 
   private burst(x: number, y: number, color: string, n: number, speed: number, kind: PartKind = 'dot') {
+    if (this.reducedMotion) n = Math.ceil(n * 0.4);
     for (let i = 0; i < n; i++) {
       const a = rand(0, TAU);
       const s = rand(speed * 0.3, speed);
@@ -2611,8 +2625,10 @@ export class Game {
     this.cam.shake = Math.max(0, this.cam.shake - this.cam.shake * 7 * raw - 2 * raw);
 
     if (this.state === 'menu') {
-      this.menuT += raw;
-      this.updateMenuParts(raw);
+      if (!this.reducedMotion) {
+        this.menuT += raw;
+        this.updateMenuParts(raw);
+      }
       this.updateFx(dt);
       this.render();
       return;
@@ -3082,6 +3098,12 @@ export class Game {
           const v = e.variant ?? 0;
           const healthRatio = e.hp / e.maxHp;
           const bossPhase = healthRatio < 0.3 ? 3 : healthRatio < 0.65 ? 2 : 1;
+          const previousVisualPhase = this.bossVisualPhases.get(e) ?? bossPhase;
+          if (bossPhase > previousVisualPhase && !this.reducedMotion) {
+            this.part(e.x, e.y, 0, 0, 0.7, e.r * 1.25, this.zone.bossColor, 'ring');
+            this.burst(e.x, e.y, this.zone.bossColor, 14, 220, 'spark');
+          }
+          this.bossVisualPhases.set(e, bossPhase);
           e.faceA = this.bossAimAngle(e, 220, 0.72);
           if (e.minionT <= 0 && this.enemies.length < this.difficulty().activeCap - 3) {
             e.minionT = this.waveDifficulty.bossMinionGap * (bossPhase === 3 ? 0.8 : bossPhase === 2 ? 0.9 : 1);
@@ -3475,8 +3497,8 @@ export class Game {
     c.fillStyle = '#070a10';
     c.fillRect(0, 0, this.viewW, this.viewH);
 
-    const shx = (Math.random() * 2 - 1) * this.cam.shake;
-    const shy = (Math.random() * 2 - 1) * this.cam.shake;
+    const shx = this.reducedMotion ? 0 : (Math.random() * 2 - 1) * this.cam.shake;
+    const shy = this.reducedMotion ? 0 : (Math.random() * 2 - 1) * this.cam.shake;
     c.save();
     c.translate(this.viewW / 2, this.viewH / 2);
     c.scale(this.zoom, this.zoom);
@@ -3897,6 +3919,13 @@ export class Game {
     if (e.kind === 'wraith') this.drawGlow(c, e.x, e.y, e.r * 1.5, '#b9a7ff', 0.3);
 
     c.translate(e.x, e.y);
+    if (e.kind === 'boss' && e.spawn > 0) {
+      const entrance = clamp(1 - e.spawn / 0.8, 0, 1);
+      c.scale(0.86 + entrance * 0.14, 0.86 + entrance * 0.14);
+    } else {
+      const hit = clamp(e.flash / 0.7, 0, 1);
+      if (hit > 0) c.scale(1 + hit * 0.055, 1 - hit * 0.06);
+    }
     const windUp = e.windT > 0 || (e.kind === 'boss' && e.telegraphed && !e.launched);
     if (windUp) {
       c.strokeStyle = `rgba(255,90,90,${0.4 + Math.sin(this.time * 30) * 0.3})`;
@@ -4700,6 +4729,20 @@ export class Game {
 
   private drawShot(c: CanvasRenderingContext2D, s: Shot) {
     const hostile = s.from === 'e';
+    const speed = Math.hypot(s.vx, s.vy);
+    if (!this.reducedMotion && speed > 1) {
+      const trailLength = Math.min(34, speed * 0.055);
+      c.save();
+      c.globalAlpha = hostile ? 0.22 : 0.3;
+      c.strokeStyle = hostile ? HAZARD_COLOR : s.color;
+      c.lineWidth = Math.max(2, s.r * 0.75);
+      c.lineCap = 'round';
+      c.beginPath();
+      c.moveTo(s.x - (s.vx / speed) * trailLength, s.y - (s.vy / speed) * trailLength);
+      c.lineTo(s.x, s.y);
+      c.stroke();
+      c.restore();
+    }
     if (hostile) {
       // Hazard bolts get a pulsing danger ring + white core so they can never
       // be confused with pickups, boss bodies or telegraphs.
@@ -4899,8 +4942,8 @@ export class Game {
   private drawFloater(c: CanvasRenderingContext2D, f: Floater) {
     const k = f.t / f.dur;
     const alpha = k > 0.6 ? 1 - (k - 0.6) / 0.4 : 1;
-    const rise = f.t * 55;
-    const scale = f.crit && f.t < 0.12 ? 1 + (0.12 - f.t) * 5 : 1;
+    const rise = this.reducedMotion ? 0 : f.t * 55;
+    const scale = !this.reducedMotion && f.crit && f.t < 0.12 ? 1 + (0.12 - f.t) * 5 : 1;
     c.save();
     c.globalAlpha = alpha;
     c.translate(f.x, f.y - rise);

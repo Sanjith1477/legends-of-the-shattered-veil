@@ -49,7 +49,7 @@ export function LoreCodex({ initialClassId, unlocked, isTouch, onClose }: Props)
   const isUnlocked = cls.unlockWave === 0 || unlocked.includes(cls.id);
 
   return (
-    <div className="absolute inset-0 z-[55] bg-abyss/92">
+    <div className="absolute inset-0 z-[55] bg-abyss/92 anim-overlay-enter">
       {/* ambient realm glow that shifts with the legend */}
       <div
         className="absolute inset-0 pointer-events-none transition-all duration-700"

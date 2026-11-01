@@ -35,6 +35,14 @@ function cooldownText(seconds: number) {
   return seconds >= 10 ? `${Math.ceil(seconds)}s` : `${seconds.toFixed(1)}s`;
 }
 
+function setAnimatedText(el: HTMLElement | null, text: string) {
+  if (!el || el.textContent === text) return;
+  el.textContent = text;
+  el.classList.remove('anim-number-pop');
+  void el.offsetWidth;
+  el.classList.add('anim-number-pop');
+}
+
 export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
   const vp = useViewport();
   const compact = vp.compact;
@@ -94,7 +102,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
       }
       if (nameRef.current) nameRef.current.textContent = d.playerName;
       if (classRef.current) classRef.current.textContent = d.className;
-      if (lvRef.current) lvRef.current.textContent = `Lv ${d.level}`;
+      setAnimatedText(lvRef.current, `Lv ${d.level}`);
       if (hpFill.current) hpFill.current.style.width = `${(d.hp / d.maxHp) * 100}%`;
       if (hpText.current) hpText.current.textContent = `${d.hp} / ${d.maxHp}`;
       if (xpFill.current) xpFill.current.style.width = `${(d.xp / d.xpNext) * 100}%`;
@@ -106,7 +114,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
         zoneName.current.textContent = d.zoneName;
         zoneName.current.style.color = d.zoneColor;
       }
-      if (waveText.current) waveText.current.textContent = `WAVE ${d.wave}`;
+      setAnimatedText(waveText.current, `WAVE ${d.wave}`);
       if (threatRef.current) threatRef.current.textContent = d.threat;
       if (foesText.current)
         foesText.current.textContent = d.foesLeft > 0 ? `${d.foesLeft} FOES LEFT` : 'WAVE CLEAR';
@@ -117,14 +125,25 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
         void announceRef.current.offsetWidth;
         announceRef.current.classList.add('anim-banner');
       }
-      if (bossWrap.current) bossWrap.current.style.display = d.bossMax > 0 ? 'block' : 'none';
+      if (bossWrap.current) {
+        const visible = d.bossMax > 0;
+        if (visible && bossWrap.current.dataset.visible !== '1') {
+          bossWrap.current.classList.remove('anim-boss-enter');
+          void bossWrap.current.offsetWidth;
+          bossWrap.current.classList.add('anim-boss-enter');
+        } else if (!visible) {
+          bossWrap.current.classList.remove('anim-boss-enter');
+        }
+        bossWrap.current.dataset.visible = visible ? '1' : '0';
+        bossWrap.current.style.display = visible ? 'block' : 'none';
+      }
       if (bossFill.current && d.bossMax > 0) bossFill.current.style.width = `${(d.bossHp / d.bossMax) * 100}%`;
       if (bossName.current) bossName.current.textContent = d.bossName;
-      if (scoreRef.current) scoreRef.current.textContent = d.score.toLocaleString();
-      if (goldRef.current) goldRef.current.textContent = d.gold.toLocaleString();
+      setAnimatedText(scoreRef.current, d.score.toLocaleString());
+      setAnimatedText(goldRef.current, d.gold.toLocaleString());
       if (timeRef.current) timeRef.current.textContent = d.timeStr;
       if (comboWrap.current) comboWrap.current.style.display = d.combo >= 2 ? 'flex' : 'none';
-      if (comboText.current) comboText.current.textContent = `×${d.combo}`;
+      setAnimatedText(comboText.current, `×${d.combo}`);
       if (hurtRef.current) hurtRef.current.style.opacity = `${d.hurt * 0.5}`;
       if (lowHpRef.current) lowHpRef.current.style.display = d.lowHp ? 'block' : 'none';
       setFrac(abOv.current, d.abilityCd / d.abilityCdMax);

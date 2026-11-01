@@ -64,7 +64,7 @@ export function SettingsOverlay({
     'btn-dark clip-notch-sm w-full py-2.5 text-[11px] font-bold flex items-center justify-center gap-2';
 
   return (
-    <div className="absolute inset-0 z-[61] flex items-center justify-center bg-abyss/92 p-3 sm:p-6 overflow-y-auto">
+    <div className="absolute inset-0 z-[61] flex items-center justify-center bg-abyss/92 p-3 sm:p-6 overflow-y-auto anim-overlay-enter">
       <div className="w-full max-w-md my-auto anim-fade-up">
         <div className="panel-gold clip-notch p-5 sm:p-6 relative">
           <button

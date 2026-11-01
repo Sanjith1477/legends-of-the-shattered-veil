@@ -1,3 +1,4 @@
+import { useState, type AnimationEvent } from 'react';
 import type { CSSProperties } from 'react';
 import type { ShopData } from '../game/engine';
 import { RARITY_META, SHOP_EPIC_UNLOCK_WAVE, SHOP_LEGENDARY_UNLOCK_WAVE, SHOP_RARE_UNLOCK_WAVE, type ShopItemId } from '../game/data';
@@ -33,13 +34,21 @@ const EMBERS = [
 ];
 
 export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, onContinue }: Props) {
+  const [closing, setClosing] = useState(false);
   const lockedCount = data.items.filter((s) => s.locked && !s.sold).length;
   const tutorialItemIndex = data.items.findIndex(({ item, sold }) => !sold && data.gold >= item.cost);
   const highlightedItemIndex = tutorialItemIndex >= 0 ? tutorialItemIndex : data.items.findIndex(({ sold }) => !sold);
+  const handleExitAnimationEnd = (event: AnimationEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget && event.animationName === 'marketExit') onContinue();
+  };
 
   return (
-    <div className="absolute inset-0 z-40 flex items-start justify-center overflow-y-auto bg-abyss/80 px-3 py-4">
-      <div data-tutorial="marketplace" className="market-stage relative w-full max-w-6xl my-auto anim-fade-up rounded-xl border border-gold/25 shadow-[0_30px_80px_rgba(0,0,0,0.65)] overflow-hidden">
+    <div className="absolute inset-0 z-40 flex items-start justify-center overflow-y-auto bg-abyss/80 px-3 py-4 anim-overlay-enter">
+      <div
+        data-tutorial="marketplace"
+        onAnimationEnd={handleExitAnimationEnd}
+        className={`market-stage relative w-full max-w-6xl my-auto anim-fade-up rounded-xl border border-gold/25 shadow-[0_30px_80px_rgba(0,0,0,0.65)] overflow-hidden ${closing ? 'anim-market-exit' : ''}`}
+      >
         <div className="market-awning" />
         {/* floating embers */}
         <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
@@ -96,7 +105,7 @@ export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, 
                   <circle cx="12" cy="12" r="9" fill="#ffd24a" stroke="#a87b1e" strokeWidth="2" />
                   <circle cx="12" cy="12" r="4" fill="none" stroke="#a87b1e" strokeWidth="1.6" />
                 </svg>
-                {data.gold}
+                <span key={data.gold} className="anim-number-pop">{data.gold}</span>
                 <span className="text-xs text-faint font-body font-bold">G</span>
               </div>
             </div>
@@ -135,7 +144,7 @@ export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, 
                 >
                   {sold && (
                     <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 pointer-events-none rounded-[inherit]">
-                      <span className="font-display font-black text-lg tracking-[0.3em] text-parch/60 -rotate-12 border-2 border-parch/30 px-4 py-1 rounded bg-black/40">
+                      <span className="font-display font-black text-lg tracking-[0.3em] text-parch/60 -rotate-12 border-2 border-parch/30 px-4 py-1 rounded bg-black/40 anim-purchase-confirm">
                         SOLD
                       </span>
                     </div>
@@ -232,7 +241,8 @@ export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, 
                 <RestockPips left={data.shopRerollsLeft} />
               </button>
               <button
-                onClick={onContinue}
+                onClick={() => setClosing(true)}
+                disabled={closing}
                 data-tutorial-detail="market-continue"
                 className="btn-gold clip-notch px-7 py-3 shrink-0 text-sm font-black flex items-center gap-2 min-h-[48px] shadow-[0_0_24px_rgba(226,180,92,0.35)]"
               >

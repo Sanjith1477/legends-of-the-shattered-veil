@@ -49,7 +49,7 @@ export function ProgressionIndex({ discovery, initialTab = 'powers', onClose }: 
   const total = tab === 'powers' ? POWERS.length : SHOP_ITEMS.length;
 
   return (
-    <div className="absolute inset-0 z-[64] bg-abyss/94 p-3 sm:p-6 overflow-y-auto">
+    <div className="absolute inset-0 z-[64] bg-abyss/94 p-3 sm:p-6 overflow-y-auto anim-overlay-enter">
       <div className="w-full max-w-6xl mx-auto anim-fade-up">
         <div className="flex items-end justify-between gap-3 border-b border-gold/30 pb-3">
           <div>

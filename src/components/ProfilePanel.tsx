@@ -10,6 +10,8 @@ interface Props {
   onChangePassword: (current: string, next: string, confirm: string) => Promise<string | null>;
   onLogout: () => void;
   onQuit: () => void;
+  quitBusy: boolean;
+  quitError: string;
   onClose: () => void;
 }
 
@@ -25,7 +27,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
 const inputClass =
   'w-full bg-[#070b12] border border-[#4a3d24] focus:border-goldbright outline-none rounded-sm px-3 py-2.5 text-parch font-medium tracking-wide shadow-[inset_0_2px_8px_rgba(0,0,0,0.5)] placeholder:text-[#5d6778]';
 
-export function ProfilePanel({ profile, cloud, onlineCount, onChangePassword, onLogout, onQuit, onClose }: Props) {
+export function ProfilePanel({ profile, cloud, onlineCount, onChangePassword, onLogout, onQuit, quitBusy, quitError, onClose }: Props) {
   const [pwOpen, setPwOpen] = useState(false);
   const [cur, setCur] = useState('');
   const [next, setNext] = useState('');
@@ -56,7 +58,7 @@ export function ProfilePanel({ profile, cloud, onlineCount, onChangePassword, on
   };
 
   return (
-    <div className="absolute inset-0 z-[62] flex items-center justify-center bg-abyss/92 p-3 sm:p-6 overflow-y-auto">
+    <div className="absolute inset-0 z-[62] flex items-center justify-center bg-abyss/92 p-3 sm:p-6 overflow-y-auto anim-overlay-enter">
       <div className="w-full max-w-lg my-auto anim-fade-up">
         <div className="panel-gold clip-notch p-5 sm:p-6 relative overflow-hidden">
           <div className="absolute -right-12 -top-12 w-56 h-56 rounded-full pointer-events-none" style={{ background: `radial-gradient(circle, ${cls.color}2e 0%, transparent 65%)` }} />
@@ -169,12 +171,13 @@ export function ProfilePanel({ profile, cloud, onlineCount, onChangePassword, on
                 QUIT GAME
               </button>
             ) : (
-              <button onClick={onQuit} className="btn-gold clip-notch py-3 text-xs font-black bg-blood/80 flex items-center justify-center">
-                CONFIRM QUIT
+              <button onClick={onQuit} disabled={quitBusy} className="btn-gold clip-notch py-3 text-xs font-black bg-blood/80 flex items-center justify-center disabled:opacity-60">
+                {quitBusy ? 'SAVING…' : 'CONFIRM QUIT'}
               </button>
             )}
           </div>
-          {confirmQuit && <p className="text-[10px] text-faint mt-1.5 text-center">Quitting closes the game window. Your progress is already saved.</p>}
+          {confirmQuit && <p className="text-[10px] text-faint mt-1.5 text-center">Your progress is saved before the game closes.</p>}
+          {quitError && <p role="alert" className="text-[11px] text-blood mt-2 text-center">{quitError}</p>}
         </div>
       </div>
     </div>

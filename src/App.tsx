@@ -52,9 +52,11 @@ import { GameOverScreen } from './components/GameOverScreen';
 import { LevelUpOverlay } from './components/LevelUpOverlay';
 import { ShopOverlay } from './components/ShopOverlay';
 import { AccountPanel } from './components/AccountPanel';
+import { exitAndroidNativeApp, isAndroidNativeApp } from './platform/androidApp';
 
 const TUTORIAL_VERSION = 2;
 type TutorialEvent = { id: number; type: 'level-up-opened' | 'skill-selected' | 'market-opened' | 'market-purchased' | 'market-continued' };
+type PendingSave = { save: () => Promise<string | null>; promise: Promise<string | null> };
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -80,6 +82,10 @@ export default function App() {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState('');
   const inscribedKeyRef = useRef<string | null>(null);
+  const pendingSavesRef = useRef(new Set<PendingSave>());
+  const quittingRef = useRef(false);
+  const [quitBusy, setQuitBusy] = useState(false);
+  const [quitError, setQuitError] = useState('');
   const [muted, setMuted] = useState(false);
   const [musicOn, setMusicOn] = useState(() => {
     try {
@@ -381,15 +387,93 @@ export default function App() {
     setAccountPanelOpen(true);
   };
 
-  const quitGame = () => {
-    setProfileOpen(false);
-    gameRef.current?.toMenu();
-    window.close();
-    // Browsers block close() for tabs the script did not open — show a farewell.
-    setTimeout(() => {
-      document.body.innerHTML =
-        '<div style="height:100%;display:flex;align-items:center;justify-content:center;background:#05070c;color:#e2b45c;font-family:Cinzel,Georgia,serif;text-align:center;padding:24px"><div><div style="font-size:12px;letter-spacing:.5em;opacity:.7">FAREWELL, ADVENTURER</div><div style="font-size:clamp(24px,6vw,44px);font-weight:900;margin-top:10px">THE REALMS AWAIT YOUR RETURN</div><div style="font-size:13px;color:#8a94a8;margin-top:14px;font-family:sans-serif">You may close this tab safely — your progress is saved.</div></div></div>';
-    }, 120);
+  const trackSave = (save: () => Promise<string | null>) => {
+    const task: PendingSave = { save, promise: Promise.resolve(null) };
+    task.promise = Promise.resolve()
+      .then(save)
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[AETHERIA] progress save failed:', error);
+        return message;
+      });
+    pendingSavesRef.current.add(task);
+    void task.promise.then((error) => {
+      if (!error) pendingSavesRef.current.delete(task);
+    });
+    return task;
+  };
+
+  const saveCloudRun = async (run: GameStats): Promise<string | null> => {
+    const result = await recordRun({
+      classId: run.classId,
+      score: run.score,
+      wave: run.wave,
+      level: run.level,
+      kills: run.kills,
+      gold: run.gold,
+      durationSeconds: run.timeSec,
+    });
+    if (result.error) {
+      console.error('[AETHERIA] record_run failed:', result.error);
+      return result.error;
+    }
+    try {
+      const board = await fetchCloudState();
+      if (board.error) console.error('[AETHERIA] leaderboard refresh after save failed:', board.error);
+      else {
+        setProfiles(board.profiles);
+        setScores(board.scores);
+      }
+    } catch (error) {
+      console.error('[AETHERIA] leaderboard refresh after save failed:', error);
+    }
+    return null;
+  };
+
+  const quitGame = async () => {
+    if (!isAndroidNativeApp()) {
+      setProfileOpen(false);
+      gameRef.current?.toMenu();
+      window.close();
+      // Browsers block close() for tabs the script did not open.
+      setTimeout(() => {
+        document.body.innerHTML =
+          '<div style="height:100%;display:flex;align-items:center;justify-content:center;background:#05070c;color:#e2b45c;font-family:Cinzel,Georgia,serif;text-align:center;padding:24px"><div><div style="font-size:12px;letter-spacing:.5em;opacity:.7">FAREWELL, ADVENTURER</div><div style="font-size:clamp(24px,6vw,44px);font-weight:900;margin-top:10px">THE REALMS AWAIT YOUR RETURN</div><div style="font-size:13px;color:#8a94a8;margin-top:14px;font-family:sans-serif">You may close this tab safely — your progress is saved.</div></div></div>';
+      }, 120);
+      return;
+    }
+
+    if (quittingRef.current) return;
+    quittingRef.current = true;
+    setQuitBusy(true);
+    setQuitError('');
+    try {
+      for (const task of [...pendingSavesRef.current]) {
+        let error = await task.promise;
+        if (error) {
+          task.promise = Promise.resolve()
+            .then(task.save)
+            .catch((retryError: unknown) => {
+              const message = retryError instanceof Error ? retryError.message : String(retryError);
+              console.error('[AETHERIA] progress save retry failed:', retryError);
+              return message;
+            });
+          error = await task.promise;
+        }
+        if (error) {
+          setQuitError(`Could not save progress to the cloud. The game is still open so you can try again. ${error}`);
+          return;
+        }
+        pendingSavesRef.current.delete(task);
+      }
+      await exitAndroidNativeApp();
+    } catch (error) {
+      console.error('[AETHERIA] could not exit Android app:', error);
+      setQuitError(error instanceof Error ? error.message : 'Could not close the game. Please try again.');
+    } finally {
+      quittingRef.current = false;
+      setQuitBusy(false);
+    }
   };
 
   const toggleMusic = () => {
@@ -524,22 +608,7 @@ export default function App() {
           setProfiles(loadProfiles());
         }
         if (cloud) {
-          void recordRun({
-            classId: live.classId,
-            score: live.score,
-            wave: live.wave,
-            level: live.level,
-            kills: live.kills,
-            gold: live.gold,
-            durationSeconds: live.timeSec,
-          }).then(() => {
-            void fetchCloudState().then((board) => {
-              if (!board.error) {
-                setProfiles(board.profiles);
-                setScores(board.scores);
-              }
-            });
-          });
+          trackSave(() => saveCloudRun(live));
         } else {
           const result = recordProfileRun(live.profileId, {
             classId: live.classId,
@@ -706,7 +775,8 @@ export default function App() {
     inscribedKeyRef.current = key;
     setSaveState('saving');
     setSaveError('');
-    void inscribeRun().then((err) => {
+    const task = trackSave(inscribeRun);
+    void task.promise.then((err) => {
       if (err) {
         console.error('[AETHERIA] run save failed:', err);
         setSaveState('error');
@@ -723,7 +793,8 @@ export default function App() {
     inscribedKeyRef.current = `${activeProfile.id}|${stats.classId}|${stats.score}|${stats.wave}|${stats.timeSec}`;
     setSaveState('saving');
     setSaveError('');
-    void inscribeRun().then((err) => {
+    const task = trackSave(inscribeRun);
+    void task.promise.then((err) => {
       if (err) {
         setSaveState('error');
         setSaveError(err);
@@ -846,6 +917,8 @@ export default function App() {
           onChangePassword={changePassword}
           onLogout={logOut}
           onQuit={quitGame}
+          quitBusy={quitBusy}
+          quitError={quitError}
           onClose={() => setProfileOpen(false)}
         />
       )}

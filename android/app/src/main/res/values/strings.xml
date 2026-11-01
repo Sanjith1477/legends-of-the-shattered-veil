@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Legends of the Shattered Veil</string>
+    <string name="title_activity_main">Legends of the Shattered Veil</string>
+    <string name="package_name">com.legends.shatteredveil.game</string>
+    <string name="custom_url_scheme">com.legends.shatteredveil.game</string>
+</resources>

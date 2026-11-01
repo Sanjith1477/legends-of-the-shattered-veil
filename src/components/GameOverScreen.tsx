@@ -34,7 +34,7 @@ export function GameOverScreen({ stats, scores, profile, saveState, saveError, o
   const s = stats.timeSec % 60;
 
   return (
-    <div className="absolute inset-0 z-50 bg-abyss/85 overflow-y-auto">
+    <div className="absolute inset-0 z-50 bg-abyss/85 overflow-y-auto anim-overlay-enter">
       <div className="min-h-full flex items-center justify-center p-3 sm:p-6">
         <div className="w-full max-w-lg anim-fade-up">
           <div className="text-center">

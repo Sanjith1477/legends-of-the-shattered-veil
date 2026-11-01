@@ -81,7 +81,7 @@ export function StartScreen({
   };
 
   return (
-    <div className="absolute inset-0 z-40 overflow-y-auto">
+    <div className="absolute inset-0 z-40 overflow-y-auto anim-overlay-enter">
       <div className="min-h-full flex flex-col items-center px-3 sm:px-6 py-3 sm:py-5">
         {/* top nav */}
         <header className="w-full max-w-6xl flex items-center justify-between gap-2 anim-fade-up">
@@ -135,7 +135,7 @@ export function StartScreen({
 
         {/* logo */}
         <div className="text-center mt-3 sm:mt-5 anim-fade-up" style={{ animationDelay: '60ms' }}>
-          <h1 className="font-display font-black text-gold text-emboss leading-tight text-[clamp(20px,6vw,56px)] tracking-[0.02em]">LEGENDS OF THE SHATTERED VEIL</h1>
+          <h1 className="font-display font-black text-gold text-emboss leading-tight text-[clamp(20px,6vw,56px)] tracking-[0.02em] anim-title">LEGENDS OF THE SHATTERED VEIL</h1>
           <div className="mt-2 text-[10px] sm:text-xs tracking-[0.08em] text-faint font-bold">Eight Legends. Five Realms. One Shattered World.</div>
         </div>
 

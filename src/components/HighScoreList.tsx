@@ -51,9 +51,10 @@ export function HighScoreList({ scores, limit = 8, highlightScore, activeProfile
           <div
             key={`${s.name}-${s.score}-${i}`}
             className={cn(
-              'grid grid-cols-[20px_16px_minmax(0,1fr)_56px_62px] sm:grid-cols-[24px_18px_minmax(0,1fr)_66px_66px_78px] items-center gap-1.5 sm:gap-2 px-2 py-[5px] clip-notch-sm text-sm',
+              'grid grid-cols-[20px_16px_minmax(0,1fr)_56px_62px] sm:grid-cols-[24px_18px_minmax(0,1fr)_66px_66px_78px] items-center gap-1.5 sm:gap-2 px-2 py-[5px] clip-notch-sm text-sm anim-row-enter',
               highlighted ? 'bg-gold/15 border border-gold/50' : 'bg-black/25 border border-transparent'
             )}
+            style={{ animationDelay: `${Math.min(i, 5) * 35}ms` }}
           >
             <span
               className="font-display font-bold text-center text-xs"

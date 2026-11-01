@@ -23,7 +23,7 @@ function RerollPips({ left, max = 3 }: { left: number; max?: number }) {
 
 export function LevelUpOverlay({ data, onChoose, onOpenIndex, onReroll }: Props) {
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center overflow-y-auto bg-abyss/75 px-3 py-5">
+    <div className="absolute inset-0 z-40 flex items-center justify-center overflow-y-auto bg-abyss/75 px-3 py-5 anim-overlay-enter">
       {/* soft radial glow behind the cards */}
       <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 42%, rgba(226,180,92,0.10), transparent 60%)' }} />
       <div className="relative w-full max-w-4xl text-center anim-fade-up my-auto">
@@ -52,10 +52,10 @@ export function LevelUpOverlay({ data, onChoose, onOpenIndex, onReroll }: Props)
               <button
                 key={power.id}
                 onClick={() => onChoose(power.id)}
-                className="choice-card power-choice clip-notch panel p-4 min-h-[210px] flex flex-col items-start group text-left"
+                className="choice-card power-choice clip-notch panel p-4 min-h-[210px] flex flex-col items-start group text-left anim-card-in"
                 data-rarity={power.rarity}
                 data-tutorial-card="level-up"
-                style={{ '--power': rarityColor, '--rarity-color': rarityColor } as CSSProperties}
+                style={{ '--power': rarityColor, '--rarity-color': rarityColor, animationDelay: `${index * 70}ms` } as CSSProperties}
               >
                 <div className="flex w-full items-start justify-between">
                   <span className="choice-gem" style={{ ['--rarity-color' as string]: rarityColor }}>

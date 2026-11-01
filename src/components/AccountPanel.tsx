@@ -94,22 +94,22 @@ export function AccountPanel({ profiles, activeProfile, cloudStatus, required = 
   const isSetPw = mode === 'set-password';
 
   return (
-    <div className="absolute inset-0 z-[60] flex items-center justify-center px-3 py-5 overflow-y-auto">
+    <div className="absolute inset-0 z-[60] flex items-center justify-center px-3 py-5 overflow-y-auto anim-overlay-enter">
       {/* full-bleed gate backdrop so the title screen never bleeds through */}
-      <div className="absolute inset-0 bg-[#05070c]" />
+      <div className="absolute inset-0 bg-[#05070c]/92" />
       <div className="absolute inset-0 opacity-70" style={{ background: 'radial-gradient(ellipse at 50% 30%, rgba(226,180,92,0.10) 0%, transparent 58%)' }} />
       <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(0,0,0,0.5) 0%, transparent 25%, transparent 70%, rgba(0,0,0,0.65) 100%)' }} />
 
       <div className="relative w-full max-w-[430px] anim-fade-up my-auto">
         {/* crest */}
-        <div className="text-center mb-5">
+        <div className="text-center mb-5 anim-title">
           <div className="inline-flex items-center gap-2 text-gold mb-2">
             <span className="w-10 h-[1px] bg-gradient-to-r from-transparent to-gold/60" />
             <ClassEmblem classId="sandseer" size={24} />
             <span className="w-10 h-[1px] bg-gradient-to-l from-transparent to-gold/60" />
           </div>
           <div className="font-display text-[10px] tracking-[0.5em] text-gold/80">AETHERIA REALM GATE</div>
-          <h2 className="font-display font-black text-[clamp(30px,8vw,46px)] leading-none text-goldbright text-emboss mt-1.5">
+          <h2 key={mode} className="font-display font-black text-[clamp(30px,8vw,46px)] leading-none text-goldbright text-emboss mt-1.5 anim-state-enter">
             {isSignup ? 'CREATE ACCOUNT' : isSetPw ? 'SECURE ACCOUNT' : 'SIGN IN'}
           </h2>
           <p className="text-[12.5px] text-parch/70 mt-2.5 px-4">
