@@ -43,6 +43,16 @@ function setAnimatedText(el: HTMLElement | null, text: string) {
   el.classList.add('anim-number-pop');
 }
 
+function pulse(el: HTMLElement | null, className: string) {
+  if (!el) return;
+  el.classList.remove(className);
+  void el.offsetWidth;
+  el.classList.add(className);
+  // Drop the pulse class afterwards so it never overrides the number-pop
+  // animation on the same element or replays on unrelated re-renders.
+  el.addEventListener('animationend', () => el.classList.remove(className), { once: true });
+}
+
 export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
   const vp = useViewport();
   const compact = vp.compact;
@@ -52,8 +62,11 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
   const nameRef = useRef<HTMLSpanElement>(null);
   const classRef = useRef<HTMLSpanElement>(null);
   const lvRef = useRef<HTMLSpanElement>(null);
+  const hpShell = useRef<HTMLDivElement>(null);
   const hpFill = useRef<HTMLDivElement>(null);
+  const hpGhost = useRef<HTMLDivElement>(null);
   const hpText = useRef<HTMLSpanElement>(null);
+  const xpShell = useRef<HTMLDivElement>(null);
   const xpFill = useRef<HTMLDivElement>(null);
   const buffRef = useRef<HTMLDivElement>(null);
   const zoneName = useRef<HTMLSpanElement>(null);
@@ -62,10 +75,13 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
   const foesText = useRef<HTMLSpanElement>(null);
   const announceRef = useRef<HTMLDivElement>(null);
   const bossWrap = useRef<HTMLDivElement>(null);
+  const bossShell = useRef<HTMLDivElement>(null);
   const bossFill = useRef<HTMLDivElement>(null);
+  const bossGhost = useRef<HTMLDivElement>(null);
   const bossName = useRef<HTMLSpanElement>(null);
   const scoreRef = useRef<HTMLDivElement>(null);
   const goldRef = useRef<HTMLSpanElement>(null);
+  const goldPulse = useRef<HTMLSpanElement>(null);
   const timeRef = useRef<HTMLSpanElement>(null);
   const comboWrap = useRef<HTMLDivElement>(null);
   const comboText = useRef<HTMLSpanElement>(null);
@@ -83,6 +99,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
   const feedRows = useRef<(HTMLDivElement | null)[]>([]);
   const lastAnnounce = useRef(0);
   const lastFeed = useRef('');
+  const previous = useRef({ hp: -1, xp: -1, level: -1, gold: -1, wave: -1, bossHp: -1, bossMax: -1 });
 
   // how many feed lines fit on this screen (read inside the rAF-driven update)
   const feedCount = useRef(5);
@@ -102,10 +119,22 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
       }
       if (nameRef.current) nameRef.current.textContent = d.playerName;
       if (classRef.current) classRef.current.textContent = d.className;
+      const prev = previous.current;
+      const firstFrame = prev.hp < 0;
       setAnimatedText(lvRef.current, `Lv ${d.level}`);
-      if (hpFill.current) hpFill.current.style.width = `${(d.hp / d.maxHp) * 100}%`;
+      const hpPct = Math.max(0, Math.min(100, (d.hp / d.maxHp) * 100));
+      if (hpFill.current) hpFill.current.style.width = `${hpPct}%`;
+      if (hpGhost.current) hpGhost.current.style.width = `${hpPct}%`;
       if (hpText.current) hpText.current.textContent = `${d.hp} / ${d.maxHp}`;
-      if (xpFill.current) xpFill.current.style.width = `${(d.xp / d.xpNext) * 100}%`;
+      const xpPct = Math.max(0, Math.min(100, (d.xp / d.xpNext) * 100));
+      if (xpFill.current) xpFill.current.style.width = `${xpPct}%`;
+      if (!firstFrame) {
+        if (d.hp < prev.hp) pulse(hpShell.current, 'hud-hit');
+        if (d.xp > prev.xp && d.level === prev.level) pulse(xpShell.current, 'hud-xp-gain');
+        if (d.level > prev.level) pulse(lvRef.current, 'hud-levelup');
+        if (d.gold > prev.gold) pulse(goldPulse.current, 'hud-coin-pop');
+        if (d.wave > prev.wave) pulse(waveText.current, 'hud-wave-pulse');
+      }
       if (buffRef.current) {
         buffRef.current.style.display = d.buffT > 0 ? 'flex' : 'none';
         if (d.buffT > 0) buffRef.current.textContent = `☀ EMPOWERED ${Math.ceil(d.buffT)}s`;
@@ -138,6 +167,10 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
         bossWrap.current.style.display = visible ? 'block' : 'none';
       }
       if (bossFill.current && d.bossMax > 0) bossFill.current.style.width = `${(d.bossHp / d.bossMax) * 100}%`;
+      if (bossGhost.current && d.bossMax > 0) bossGhost.current.style.width = `${(d.bossHp / d.bossMax) * 100}%`;
+      if (!firstFrame && d.bossMax > 0 && prev.bossMax === d.bossMax && d.bossHp < prev.bossHp) {
+        pulse(bossShell.current, 'hud-boss-hit');
+      }
       if (bossName.current) bossName.current.textContent = d.bossName;
       setAnimatedText(scoreRef.current, d.score.toLocaleString());
       setAnimatedText(goldRef.current, d.gold.toLocaleString());
@@ -167,6 +200,16 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
         legActive.current.style.display = d.legacyActive ? 'block' : 'none';
         legActive.current.textContent = d.legacyActive;
       }
+
+      previous.current = {
+        hp: d.hp,
+        xp: d.xp,
+        level: d.level,
+        gold: d.gold,
+        wave: d.wave,
+        bossHp: d.bossHp,
+        bossMax: d.bossMax,
+      };
 
       const rows = feedCount.current;
       const feedKey = `${rows}:${d.feed.map((f) => f.id).join(',')}`;
@@ -217,17 +260,21 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
       {/* top row */}
       <div
         className={`absolute top-0 left-0 right-0 flex items-start justify-between gap-1 sm:gap-2 px-1 sm:px-3 ${isTouch ? 'h-[140px]' : ''}`}
-        style={{ paddingTop: 'calc(4px + env(safe-area-inset-top))' }}
+        style={{
+          paddingTop: 'calc(4px + var(--safe-top))',
+          paddingLeft: 'calc(4px + var(--safe-left))',
+          paddingRight: 'calc(4px + var(--safe-right))',
+        }}
       >
         {/* player frame */}
         <div
           className="panel-gold clip-notch shrink-0 z-10"
           style={{
-            width: isTouch ? 'calc(100% - 8px)' : compact ? (tiny ? 116 : 140) : 240,
+            width: isTouch ? 'calc(100% - 8px - var(--safe-left) - var(--safe-right))' : compact ? (tiny ? 116 : 140) : 240,
             padding: isTouch ? '7px 9px' : compact ? '5px 6px' : '10px 12px',
             background: 'linear-gradient(135deg, rgba(7,16,28,0.96), rgba(11,25,38,0.94))',
             boxShadow: '0 5px 18px rgba(0,0,0,0.28), 0 0 16px rgba(70,200,220,0.08)',
-            ...(isTouch ? { position: 'absolute', left: 4, top: 77 } : {}),
+            ...(isTouch ? { position: 'absolute', left: 'calc(4px + var(--safe-left))', top: 'calc(77px + var(--safe-top))' } : {}),
           }}
           data-tutorial="legend"
         >
@@ -257,7 +304,8 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
                 />
                 {(isTouch || !compact) && <span ref={classRef} className="text-[10px] text-cyan-200/90 font-bold tracking-wide truncate" />}
               </div>
-              <div data-tutorial="hp" className="bar-shell clip-notch-sm relative mt-1" style={{ height: compact ? 11 : 14 }}>
+              <div ref={hpShell} data-tutorial="hp" className="bar-shell clip-notch-sm relative mt-1" style={{ height: compact ? 11 : 14 }}>
+                <div ref={hpGhost} className="hp-ghost" />
                 <div ref={hpFill} className="bar-fill" style={{ width: '100%', background: 'linear-gradient(180deg,#ff8f96,#e54855)' }} />
                 <span
                   ref={hpText}
@@ -265,7 +313,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
                   style={{ fontSize: compact ? 8 : 10, textShadow: '0 1px 2px rgba(0,0,0,0.9)' }}
                 />
               </div>
-              <div data-tutorial="xp" className="bar-shell clip-notch-sm mt-1 bg-black/70 border border-cyan-300/25" style={{ height: compact ? 5 : 6 }}>
+              <div ref={xpShell} data-tutorial="xp" className="bar-shell clip-notch-sm mt-1 bg-black/70 border border-cyan-300/25" style={{ height: compact ? 5 : 6 }}>
                 <div ref={xpFill} className="bar-fill" style={{ width: '0%', background: 'linear-gradient(90deg,#63e6d1,#16bfc4)' }} />
               </div>
             </div>
@@ -292,7 +340,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
               fontSize: compact ? 8.5 : 11.5,
               background: 'rgba(5,14,24,0.92)',
               boxShadow: '0 4px 16px rgba(0,0,0,0.24)',
-              ...(isTouch ? { position: 'absolute', left: 4, right: 154, top: 4, minHeight: 40 } : {}),
+              ...(isTouch ? { position: 'absolute', left: 'calc(4px + var(--safe-left))', right: 'calc(154px + var(--safe-right))', top: 'calc(4px + var(--safe-top))', minHeight: 40 } : {}),
             }}
           >
             <span ref={zoneName} className="truncate" style={{ maxWidth: isTouch ? '34vw' : compact ? '22vw' : '38vw' }} />
@@ -311,7 +359,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
           </div>
           <div
             ref={announceRef}
-            className="font-display font-black text-gold text-emboss tracking-[0.12em] text-center opacity-0 whitespace-nowrap"
+            className="hud-announce font-display font-black text-gold text-emboss tracking-[0.12em] text-center opacity-0 whitespace-nowrap"
             style={{
               fontSize: 'clamp(12px, 3.8vw, 34px)',
               marginTop: isTouch ? (vp.h < 430 ? 136 : 148) : compact ? 10 : 24,
@@ -322,7 +370,8 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
               <span ref={bossName} className="text-[#ff9a9a] truncate" />
               <span className="text-faint shrink-0">WORLD BOSS</span>
             </div>
-            <div className="bar-shell clip-notch-sm" style={{ height: compact ? 7 : 10 }}>
+            <div ref={bossShell} className="bar-shell clip-notch-sm" style={{ height: compact ? 7 : 10 }}>
+              <div ref={bossGhost} className="hp-ghost" style={{ background: 'linear-gradient(180deg,#ffc7a3,#ff6b6b)', opacity: 0.5 }} />
               <div ref={bossFill} className="bar-fill" style={{ width: '100%', background: 'linear-gradient(180deg,#ff7d7d,#a92626)' }} />
             </div>
           </div>
@@ -336,7 +385,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
               width: compact ? (tiny ? 92 : 110) : 176,
               padding: compact ? '5px 6px' : '10px 13px',
               background: 'linear-gradient(135deg, rgba(7,16,28,0.96), rgba(11,25,38,0.94))',
-              ...(isTouch ? { position: 'absolute', right: 50, top: 4 } : {}),
+              ...(isTouch ? { position: 'absolute', right: 'calc(50px + var(--safe-right))', top: 'calc(4px + var(--safe-top))' } : {}),
             }}
           >
             <div className="font-display font-bold tracking-[0.3em] text-cyan-100/85" style={{ fontSize: compact ? 8 : 9 }}>
@@ -355,7 +404,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
               className="flex items-center justify-end gap-2 mt-1.5 px-2 py-0.5 rounded bg-black/45 border border-gold/30 shadow-inner"
               style={{ fontSize: compact ? 11 : 13 }}
             >
-              <span className="flex items-center gap-1.5 text-goldbright font-bold">
+              <span ref={goldPulse} className="flex items-center gap-1.5 text-goldbright font-bold">
                 <svg
                   width={compact ? 13 : 15}
                   height={compact ? 13 : 15}
@@ -412,7 +461,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
           </div>
 
           {/* dedicated system cluster: PAUSE is always visible and thumb-sized */}
-          <div className="flex flex-col items-center gap-1 pointer-events-auto" style={isTouch ? { position: 'absolute', right: 4, top: 4 } : undefined}>
+          <div className="flex flex-col items-center gap-1 pointer-events-auto" style={isTouch ? { position: 'absolute', right: 'calc(4px + var(--safe-right))', top: 'calc(4px + var(--safe-top))' } : undefined}>
             <button
               onClick={onPause}
               aria-label="Pause game"
@@ -449,14 +498,18 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
       {/* bottom row */}
       <div
         className="absolute bottom-0 left-0 right-0 flex items-end justify-between px-1.5 sm:px-3 gap-2"
-        style={{ paddingBottom: 'calc(8px + env(safe-area-inset-bottom))' }}
+        style={{
+          paddingBottom: 'calc(8px + var(--safe-bottom))',
+          paddingLeft: 'calc(6px + var(--safe-left))',
+          paddingRight: 'calc(6px + var(--safe-right))',
+        }}
       >
         {/* event feed — shrinks out of the way of touch controls */}
         <div
           className="flex flex-col gap-[5px] min-w-0 panel-gold clip-notch px-2.5 py-2.5"
           style={{
             width: isTouch ? 'min(64vw, 340px)' : 'min(400px, 46vw)',
-            marginBottom: isTouch ? 'calc(16px + env(safe-area-inset-bottom))' : 0,
+            marginBottom: isTouch ? 'calc(16px + var(--safe-bottom))' : 0,
             background: 'rgba(4,10,18,0.9)',
             borderColor: isTouch ? 'rgba(82,164,190,0.38)' : 'rgba(226,180,92,0.38)',
           }}
@@ -522,7 +575,7 @@ export function HUD({ bus, isTouch, onPause, onOpenSettings }: Props) {
           </div>
         )}
         {isTouch && (
-          <div ref={legActive} className="absolute left-1/2 -translate-x-1/2 font-display text-[10px] tracking-[0.2em] text-goldbright text-emboss px-2 py-1 panel-gold clip-notch-sm whitespace-nowrap" style={{ display: 'none', bottom: 'calc(150px + env(safe-area-inset-bottom))' }} />
+          <div ref={legActive} className="absolute left-1/2 -translate-x-1/2 font-display text-[10px] tracking-[0.2em] text-goldbright text-emboss px-2 py-1 panel-gold clip-notch-sm whitespace-nowrap" style={{ display: 'none', bottom: 'calc(150px + var(--safe-bottom))' }} />
         )}
       </div>
     </div>

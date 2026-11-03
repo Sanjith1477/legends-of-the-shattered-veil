@@ -56,7 +56,7 @@ export function LoreCodex({ initialClassId, unlocked, isTouch, onClose }: Props)
         style={{ background: `radial-gradient(ellipse at 70% 40%, ${cls.color}22 0%, transparent 60%)` }}
       />
 
-      <div className="absolute inset-0 overflow-y-auto overscroll-contain p-3 sm:p-6">
+      <div className="safe-screen absolute inset-0 overflow-y-auto overscroll-contain p-3 sm:p-6">
       <div className="relative w-full max-w-5xl mx-auto">
         <div className="flex items-end justify-between gap-3 mb-3">
           <div>

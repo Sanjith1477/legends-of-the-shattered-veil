@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import type { PlayerProfile } from '../game/highscores';
 import { ClassEmblem } from './ClassEmblem';
+import { FantasyBackdrop } from './FantasyBackdrop';
 
 interface Props {
   profiles: PlayerProfile[];
@@ -94,9 +95,10 @@ export function AccountPanel({ profiles, activeProfile, cloudStatus, required = 
   const isSetPw = mode === 'set-password';
 
   return (
-    <div className="absolute inset-0 z-[60] flex items-center justify-center px-3 py-5 overflow-y-auto anim-overlay-enter">
+    <div className="safe-screen absolute inset-0 z-[60] flex items-center justify-center px-3 py-5 overflow-y-auto anim-overlay-enter">
       {/* full-bleed gate backdrop so the title screen never bleeds through */}
-      <div className="absolute inset-0 bg-[#05070c]/92" />
+      <FantasyBackdrop density="soft" />
+      <div className="absolute inset-0 bg-[#05070c]/90" />
       <div className="absolute inset-0 opacity-70" style={{ background: 'radial-gradient(ellipse at 50% 30%, rgba(226,180,92,0.10) 0%, transparent 58%)' }} />
       <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg, rgba(0,0,0,0.5) 0%, transparent 25%, transparent 70%, rgba(0,0,0,0.65) 100%)' }} />
 

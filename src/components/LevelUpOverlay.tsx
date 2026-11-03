@@ -23,7 +23,7 @@ function RerollPips({ left, max = 3 }: { left: number; max?: number }) {
 
 export function LevelUpOverlay({ data, onChoose, onOpenIndex, onReroll }: Props) {
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center overflow-y-auto bg-abyss/75 px-3 py-5 anim-overlay-enter">
+    <div className="safe-screen absolute inset-0 z-40 flex items-center justify-center overflow-y-auto bg-abyss/75 px-3 py-5 anim-overlay-enter">
       {/* soft radial glow behind the cards */}
       <div className="pointer-events-none absolute inset-0" style={{ background: 'radial-gradient(ellipse at 50% 42%, rgba(226,180,92,0.10), transparent 60%)' }} />
       <div className="relative w-full max-w-4xl text-center anim-fade-up my-auto">

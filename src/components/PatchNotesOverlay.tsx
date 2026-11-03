@@ -28,7 +28,7 @@ export function PatchNotesOverlay({ notes, currentVersion, lastSeen, onClose }: 
   }, [onClose]);
 
   return (
-    <div className="absolute inset-0 z-[55] flex items-center justify-center bg-abyss/88 p-3 sm:p-6 overflow-y-auto anim-overlay-enter">
+    <div className="safe-screen absolute inset-0 z-[55] flex items-center justify-center bg-abyss/88 p-3 sm:p-6 overflow-y-auto anim-overlay-enter">
       <div className="w-full max-w-3xl my-auto anim-fade-up">
         <div className="flex items-end justify-between gap-3 mb-3">
           <div>

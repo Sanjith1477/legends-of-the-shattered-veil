@@ -2,6 +2,7 @@ import type { GameStats } from '../game/engine';
 import type { PlayerProfile, ScoreEntry } from '../game/highscores';
 import { CLASSES } from '../game/data';
 import { Leaderboard } from './Leaderboard';
+import { FantasyBackdrop } from './FantasyBackdrop';
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -34,8 +35,10 @@ export function GameOverScreen({ stats, scores, profile, saveState, saveError, o
   const s = stats.timeSec % 60;
 
   return (
-    <div className="absolute inset-0 z-50 bg-abyss/85 overflow-y-auto anim-overlay-enter">
-      <div className="min-h-full flex items-center justify-center p-3 sm:p-6">
+    <div className="absolute inset-0 z-50 overflow-y-auto anim-overlay-enter">
+      <FantasyBackdrop density="soft" />
+      <div className="overlay-scrim pointer-events-none absolute inset-0" />
+      <div className="safe-screen relative min-h-full flex items-center justify-center p-3 sm:p-6">
         <div className="w-full max-w-lg anim-fade-up">
           <div className="text-center">
             <div className="font-display text-[10px] tracking-[0.5em] text-faint">YOUR SAGA ENDS… FOR NOW</div>

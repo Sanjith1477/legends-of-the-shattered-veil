@@ -43,7 +43,7 @@ export function ShopOverlay({ data, onBuy, onToggleLock, onOpenIndex, onReroll, 
   };
 
   return (
-    <div className="absolute inset-0 z-40 flex items-start justify-center overflow-y-auto bg-abyss/80 px-3 py-4 anim-overlay-enter">
+    <div className="safe-screen absolute inset-0 z-40 flex items-start justify-center overflow-y-auto bg-abyss/80 px-3 py-4 anim-overlay-enter">
       <div
         data-tutorial="marketplace"
         onAnimationEnd={handleExitAnimationEnd}

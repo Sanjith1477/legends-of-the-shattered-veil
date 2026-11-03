@@ -190,8 +190,8 @@ export function TouchControls({ gameRef, bus }: Props) {
       <div
         className="absolute pointer-events-auto"
         style={{
-          right: `calc(${edgeX}px + env(safe-area-inset-right))`,
-          bottom: `calc(${edgeY}px + env(safe-area-inset-bottom))`,
+          right: `calc(${edgeX}px + var(--safe-right))`,
+          bottom: `calc(${edgeY}px + var(--safe-bottom))`,
           width: attackSize,
           height: attackSize,
         }}

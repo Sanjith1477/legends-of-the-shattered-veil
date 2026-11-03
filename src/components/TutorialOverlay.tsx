@@ -151,9 +151,16 @@ export function TutorialOverlay({ isTouch, screen, event, onClose, onContinue }:
           { left: cardBounds.left + cardBounds.width / 2 - width / 2, top: cardBounds.bottom + gap },
         );
       }
+      // Keep the callout clear of Android status/navigation bars and notches.
+      const rootStyle = getComputedStyle(document.documentElement);
+      const safeTop = parseFloat(rootStyle.getPropertyValue('--safe-top')) || 0;
+      const safeRight = parseFloat(rootStyle.getPropertyValue('--safe-right')) || 0;
+      const safeBottom = parseFloat(rootStyle.getPropertyValue('--safe-bottom')) || 0;
+      const safeLeft = parseFloat(rootStyle.getPropertyValue('--safe-left')) || 0;
+      const inset = 12;
       const candidates = candidatePositions.map((candidate) => ({
-        left: clamp(candidate.left, 12, window.innerWidth - width - 12),
-        top: clamp(candidate.top, 12, window.innerHeight - height - 12),
+        left: clamp(candidate.left, inset + safeLeft, window.innerWidth - width - inset - safeRight),
+        top: clamp(candidate.top, inset + safeTop, window.innerHeight - height - inset - safeBottom),
         width,
         height,
       }));
@@ -274,13 +281,13 @@ export function TutorialOverlay({ isTouch, screen, event, onClose, onContinue }:
     <div className="fixed inset-0 z-[80] pointer-events-none" aria-live="polite">
       {anchor && (
         <div
-          className="fixed rounded-md border-2 border-goldbright pointer-events-none shadow-[0_0_0_3px_rgba(226,180,92,0.45),0_0_0_9999px_rgba(0,0,0,0.38),0_0_24px_rgba(255,217,122,0.8)]"
+          className="tutorial-spotlight fixed rounded-md border-2 border-goldbright pointer-events-none"
           style={{ top: anchor.top - 3, left: anchor.left - 3, width: anchor.width + 6, height: anchor.height + 6 }}
         />
       )}
       <section
         ref={calloutRef}
-        className="fixed w-[min(340px,calc(100vw-24px))] panel-gold clip-notch p-3.5 shadow-[0_16px_50px_rgba(0,0,0,0.85)] pointer-events-auto anim-overlay-enter"
+        className="tutorial-callout fixed w-[min(340px,calc(100vw-24px))] panel-gold clip-notch p-3.5 shadow-[0_16px_50px_rgba(0,0,0,0.85)] pointer-events-auto"
         style={position ? { top: position.top, left: position.left } : { top: 12, left: 12 }}
         aria-label={`Tutorial: ${title}`}
       >
