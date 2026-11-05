@@ -4,6 +4,9 @@ import {
   ENEMIES,
   waveComposition,
   ELITE_NAMES,
+  ELITE_ROLES,
+  ELITE_ROLE_CAPS,
+  eliteRolesFor,
   STREAKS,
   POWERS,
   SHOP_ITEMS,
@@ -20,6 +23,7 @@ import {
   FINAL_WAVE,
   MAX_PLAYER_LEVEL,
   type ClassDef,
+  type EliteRole,
   type EnemyKind,
   type PowerDef,
   type PowerId,
@@ -33,6 +37,8 @@ import { Music } from './music';
 import { legacyFor, type LegacyDef } from './lore';
 import { heroBasePower, waveDifficulty, type HeroCombatStats, type WaveDifficulty } from './difficulty';
 import { analyzeMovement, BOSS_AIM_TUNING, predictedAim, turnToward, type MovementSample } from './boss-ai';
+import { ASSASSIN_TELEPORT, sampleAssassinLanding } from './elite-teleport';
+import { ELITE_PALETTES, type ElitePalette } from './elite-visuals';
 
 export type GameState = 'menu' | 'playing' | 'paused' | 'levelup' | 'shop' | 'dying' | 'over';
 
@@ -209,6 +215,11 @@ interface Enemy {
   minionT: number; faceA: number; telegraphed: boolean; launched: boolean;
   bossAttackWindup: boolean;
   variant: number; dashT: number;
+  role: EliteRole | null;
+  roleT: number;
+  shieldFlash: number;
+  blinkX: number;
+  blinkY: number;
   dead: boolean;
 }
 
@@ -403,6 +414,7 @@ export class Game {
   private expectedHeroPower = 1;
   private waveDifficulty: WaveDifficulty = waveDifficulty(1, 1, 1);
   private playerMovementHistory: MovementSample[] = [];
+  private seenEliteRoles = new Set<EliteRole>();
 
   private feed: FeedMsg[] = [];
   private feedId = 0;
@@ -564,6 +576,15 @@ export class Game {
   /* --------------------------- public control ------------------------ */
 
   start(classId: string, name: string, profileId = 'local-hero', profileName = 'Wanderer') {
+    this.beginRun(classId, name, profileId, profileName);
+  }
+
+  private beginRun(
+    classId: string,
+    name: string,
+    profileId: string,
+    profileName: string,
+  ) {
     const cls = CLASSES.find((c) => c.id === classId) ?? CLASSES[0];
     this.classDef = cls;
     this.playerName = name.trim() || 'Wanderer';
@@ -626,6 +647,7 @@ export class Game {
     this.expectedHeroPower = this.currentHeroPower();
     this.waveDifficulty = waveDifficulty(this.expectedHeroPower, this.expectedHeroPower, 1);
     this.playerMovementHistory = [{ x: this.p.x, y: this.p.y, vx: 0, vy: 0 }];
+    this.seenEliteRoles.clear();
     this.legacy = legacyFor(cls.id);
     this.decoy = null;
     this.stasisHits = [];
@@ -1637,7 +1659,7 @@ export class Game {
     }
   }
 
-  private spawnEnemy(kind: EnemyKind) {
+  private spawnEnemy(kind: EnemyKind, forcedRole: EliteRole | null = null) {
     const def = ENEMIES[kind];
     const p = this.p!;
     const a = rand(0, TAU);
@@ -1645,25 +1667,35 @@ export class Game {
     const difficulty = this.difficulty();
     const hpMul = difficulty.hp;
     const dmgMul = difficulty.dmg;
-    const elite = kind !== 'boss' && Math.random() < difficulty.elites;
+    // Forced elite roles are a developer-test injection; production builds ignore them.
+    const forced = import.meta.env.DEV ? forcedRole : null;
+    const elite = kind !== 'boss' && (forced !== null || Math.random() < difficulty.elites);
+    const role = elite ? (forced ?? this.pickEliteRole(kind)) : null;
+    const roleDef = role ? ELITE_ROLES[role] : null;
     const zoneIdx = this.wave > 0 ? (this.wave - 1) % ZONES.length : 0;
+    const roleInit = role === 'summoner' ? rand(3.5, 5.5)
+      : role === 'healer' ? rand(2, 3.5)
+      : role === 'artillery' ? rand(1.8, 3.2)
+      : rand(2.5, 4.5);
+    const eliteName = ELITE_NAMES[Math.floor(rand(0, ELITE_NAMES.length))];
     const e: Enemy = {
       kind,
       x: clamp(p.x + Math.cos(a) * dist, 50, ARENA_W - 50),
       y: clamp(p.y + Math.sin(a) * dist, 50, ARENA_H - 50),
       vx: 0, vy: 0,
       r: def.r,
-      hp: def.hp * hpMul * (elite ? 2.2 : 1),
-      maxHp: def.hp * hpMul * (elite ? 2.2 : 1),
+      hp: def.hp * hpMul * (elite ? (role ? 1.9 : 2.2) : 1),
+      maxHp: def.hp * hpMul * (elite ? (role ? 1.9 : 2.2) : 1),
       speed: def.speed * difficulty.speed * (elite ? 1.18 : 1),
-      dmg: def.dmg * dmgMul * (elite ? 1.4 : 1),
+      dmg: def.dmg * dmgMul * (elite ? (role ? 1.3 : 1.4) : 1),
       flash: 0, frozen: 0, slow: 0, spawn: kind === 'boss' ? 0.8 : 0.45,
       atkCd: rand(0.3, 0.9), seed: rand(0, TAU),
       elite,
-      name: kind === 'boss' ? this.zone.boss : elite ? ELITE_NAMES[Math.floor(rand(0, ELITE_NAMES.length))] : def.name,
+      name: kind === 'boss' ? this.zone.boss : elite ? `${roleDef ? `${roleDef.title} ` : ''}${eliteName}` : def.name,
       shootT: rand(1.0, 2.0), phase: rand(0, 5), windT: 0, lungeT: 0,
       minionT: 6, faceA: 0, telegraphed: false, launched: false, bossAttackWindup: false,
       variant: zoneIdx, dashT: 0,
+      role, roleT: roleInit, shieldFlash: 0, blinkX: 0, blinkY: 0,
       dead: false,
     };
     if (kind === 'boss') {
@@ -1674,16 +1706,114 @@ export class Game {
       e.shootT *= this.waveDifficulty.bossAttackGap;
       e.minionT = this.waveDifficulty.bossMinionGap;
     }
+    if (roleDef && !this.seenEliteRoles.has(roleDef.id)) {
+      this.seenEliteRoles.add(roleDef.id);
+      this.pushFeed(`${roleDef.title} sighted — ${roleDef.cue}`, roleDef.color);
+    }
     if (kind === 'dragon') {
       this.sfx.play('dragonroar');
     }
     this.enemies.push(e);
-    const spawnCol = kind === 'boss' ? this.zone.bossColor : def.color;
+    const spawnCol = kind === 'boss' ? this.zone.bossColor : roleDef ? roleDef.color : def.color;
     this.burst(e.x, e.y, spawnCol, kind === 'boss' ? 26 : 10, kind === 'boss' ? 320 : 160, 'spark');
     this.part(e.x, e.y, 0, 0, 0.5, e.r, spawnCol, 'ring');
     if (kind === 'boss') {
       this.shake(8);
     }
+  }
+
+  private pickEliteRole(kind: EnemyKind): EliteRole | null {
+    const active = new Map<EliteRole, number>();
+    let supportActive = false;
+    for (const e of this.enemies) {
+      if (!e.role) continue;
+      active.set(e.role, (active.get(e.role) ?? 0) + 1);
+      if (e.role === 'summoner' || e.role === 'healer') supportActive = true;
+    }
+    const pool = eliteRolesFor(kind, this.wave).filter((role) => {
+      if ((active.get(role) ?? 0) >= ELITE_ROLE_CAPS[role]) return false;
+      // One support elite at a time keeps healer/summoner combos fair.
+      if (supportActive && (role === 'summoner' || role === 'healer')) return false;
+      return true;
+    });
+    return pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+  }
+
+  private spawnSummonedMinion(source: Enemy) {
+    const kind: EnemyKind = Math.random() < 0.7 ? 'husk' : 'skitter';
+    const def = ENEMIES[kind];
+    const difficulty = this.difficulty();
+    const a = rand(0, TAU);
+    const dist = rand(40, 70);
+    const hp = def.hp * difficulty.hp * 0.35;
+    const e: Enemy = {
+      kind,
+      x: clamp(source.x + Math.cos(a) * dist, 40, ARENA_W - 40),
+      y: clamp(source.y + Math.sin(a) * dist, 40, ARENA_H - 40),
+      vx: 0, vy: 0, r: def.r,
+      hp, maxHp: hp,
+      speed: def.speed * difficulty.speed * 0.9,
+      dmg: def.dmg * difficulty.dmg * 0.5,
+      flash: 0, frozen: 0, slow: 0, spawn: 0.35,
+      atkCd: rand(0.5, 0.9), seed: rand(0, TAU), elite: false, name: def.name,
+      shootT: rand(1.2, 2), phase: 0, windT: 0, lungeT: 0,
+      minionT: 99, faceA: 0, telegraphed: false, launched: false, bossAttackWindup: false,
+      variant: 0, dashT: 0,
+      role: null, roleT: 0, shieldFlash: 0, blinkX: 0, blinkY: 0,
+      dead: false,
+    };
+    this.enemies.push(e);
+    this.burst(e.x, e.y, def.color, 6, 140, 'spark');
+    this.part(e.x, e.y, 0, 0, 0.4, e.r, ELITE_ROLES.summoner.color, 'ring');
+  }
+
+  private summonEliteMinions(source: Enemy) {
+    const room = this.difficulty().activeCap - this.enemies.length;
+    if (room <= 0) return;
+    const count = Math.min(room, this.wave >= 20 ? 2 : 1);
+    for (let i = 0; i < count; i++) this.spawnSummonedMinion(source);
+    this.part(source.x, source.y, 0, 0, 0.65, source.r + 34, ELITE_ROLES.summoner.color, 'ring');
+    this.burst(source.x, source.y, ELITE_ROLES.summoner.color, 12, 220, 'shard');
+    this.sfx.play('bolts');
+  }
+
+  private fireArtilleryShell(e: Enemy) {
+    const p = this.p;
+    if (!p || p.dead) return;
+    const a = Math.atan2(p.y - e.y, p.x - e.x);
+    this.shots.push({
+      x: e.x + Math.cos(a) * (e.r + 8),
+      y: e.y + Math.sin(a) * (e.r + 8),
+      vx: Math.cos(a) * 165,
+      vy: Math.sin(a) * 165,
+      r: 13, dmg: e.dmg * 1.05, life: 4.2,
+      color: ELITE_ROLES.artillery.color, from: 'e', pierce: 0,
+    });
+    this.burst(e.x + Math.cos(a) * (e.r + 8), e.y + Math.sin(a) * (e.r + 8), ELITE_ROLES.artillery.color, 10, 200, 'spark');
+    this.sfx.play('shoot');
+  }
+
+  private healerPulse(e: Enemy) {
+    const radius = 210;
+    let healed = 0;
+    for (const other of this.enemies) {
+      if (other === e || other.dead || other.spawn > 0) continue;
+      if (other.hp >= other.maxHp) continue;
+      if (Math.hypot(other.x - e.x, other.y - e.y) > radius) continue;
+      const amount = Math.ceil(other.maxHp * 0.07);
+      other.hp = Math.min(other.maxHp, other.hp + amount);
+      other.flash = Math.max(other.flash, 0.35);
+      if (healed < 3) this.floater(other.x, other.y - other.r - 8, `+${amount}`, 11, '#9defa4');
+      for (let s = 0; s <= 3; s++) {
+        const t = s / 3;
+        this.part(e.x + (other.x - e.x) * t, e.y + (other.y - e.y) * t, 0, -40, 0.4, 2.5, ELITE_ROLES.healer.color, 'spark', 0, 0.96);
+      }
+      healed++;
+      if (healed >= 6) break;
+    }
+    e.hp = Math.min(e.maxHp, e.hp + Math.ceil(e.maxHp * 0.03));
+    this.part(e.x, e.y, 0, 0, 0.5, e.r + 30, ELITE_ROLES.healer.color, 'ring');
+    if (healed > 0) this.sfx.play('potion');
   }
 
   /* ----------------------------- combat ------------------------------ */
@@ -1898,7 +2028,7 @@ export class Game {
             if (e.dead || e.spawn > 0) continue;
             if (Math.hypot(e.x - rx, e.y - ry) < 65 + e.r) {
               const echoDmg = dmgBase * 0.7 * (p.hasEvoRiftStasisDoubler && p.stasisT > 0 ? 2.5 : 1);
-              this.damageEnemy(e, echoDmg, Math.cos(a), Math.sin(a), Math.random() < this.critChance(), 180);
+              this.damageEnemy(e, echoDmg, Math.cos(a), Math.sin(a), Math.random() < this.critChance(), 180, true);
             }
           }
         }, 220);
@@ -1924,7 +2054,7 @@ export class Game {
         const dy = e.y - ly;
         const d = Math.hypot(dx, dy) || 1;
         this.burst(e.x, e.y, '#6ef3ff', 6, 200, 'spark');
-        this.damageEnemy(e, dmgBase * 0.65, dx / d, dy / d, Math.random() < this.critChance(), 150);
+        this.damageEnemy(e, dmgBase * 0.65, dx / d, dy / d, Math.random() < this.critChance(), 150, true);
         lx = e.x;
         ly = e.y;
       });
@@ -1999,15 +2129,28 @@ export class Game {
     if (hitAny) this.hitstop = Math.max(this.hitstop, 0.025);
   }
 
-  private damageEnemy(e: Enemy, dmg: number, nx: number, ny: number, crit: boolean, knock: number) {
+  private damageEnemy(e: Enemy, dmg: number, nx: number, ny: number, crit: boolean, knock: number, pierceShield = false) {
     if (e.dead || e.spawn > 0) return;
+    if (e.role === 'shielded' && !pierceShield) {
+      const len = Math.hypot(nx, ny) || 1;
+      // nx/ny points from the attacker toward the enemy, so the attacker sits opposite it.
+      const frontal = (-nx / len) * Math.cos(e.faceA) + (-ny / len) * Math.sin(e.faceA);
+      if (frontal > 0.25) {
+        const firstBlock = e.shieldFlash <= 0.25;
+        dmg *= 0.2;
+        e.shieldFlash = 1;
+        this.part(e.x, e.y, 0, 0, 0.3, e.r + 12, ELITE_ROLES.shielded.color, 'ring');
+        if (firstBlock) this.floater(e.x, e.y - e.r - 6, 'BLOCKED', 12, '#bfe6ff');
+      }
+    }
     if (this.p && this.p.stasisT > 0) this.stasisHits.push({ e, dmg });
     e.hp -= dmg;
     e.flash = 1;
     e.vx += nx * knock;
     e.vy += ny * knock;
     const def = ENEMIES[e.kind];
-    this.burst(e.x, e.y, def.color, crit ? 14 : 7, crit ? 300 : 200, crit ? 'spark' : 'dot');
+    const hitCol = e.role ? ELITE_PALETTES[e.role].primary : def.color;
+    this.burst(e.x, e.y, hitCol, crit ? 14 : 7, crit ? 300 : 200, crit ? 'spark' : 'dot');
     this.floater(e.x, e.y - e.r - 6, `${Math.round(dmg)}`, crit ? 22 : 14, crit ? '#ffd97a' : '#f5efdd', crit);
     // Mechanical powers on hit
     const p = this.p;
@@ -2139,6 +2282,7 @@ export class Game {
     this.burst(e.x, e.y, def.color, e.kind === 'boss' ? 46 : 16, e.kind === 'boss' ? 460 : 280, 'dot');
     this.burst(e.x, e.y, '#ffffff', 6, 240, 'spark');
     this.part(e.x, e.y, 0, 0, 0.45, e.r * 1.4, def.color, 'ring');
+    if (e.role) this.eliteDeathEffect(e);
     this.sfx.play('kill');
     this.shake(e.kind === 'boss' ? 14 : 3.5);
     if (e.elite) this.pushFeed(`You slew ${e.name} (+${gained} score)`, '#ffd97a');
@@ -2285,7 +2429,7 @@ export class Game {
           const d = Math.hypot(e.x - p.x, e.y - p.y);
           if (d < 155 + e.r) {
             const crit = Math.random() < this.critChance();
-            this.damageEnemy(e, dmgBase * 1.6 * (crit ? 2 : 1), (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), crit, 360);
+            this.damageEnemy(e, dmgBase * 1.6 * (crit ? 2 : 1), (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), crit, 360, true);
           }
         }
         break;
@@ -2302,7 +2446,7 @@ export class Game {
           if (d < 195 + e.r) {
             e.frozen = 2.2;
             const crit = Math.random() < this.critChance();
-            this.damageEnemy(e, dmgBase * 1.4 * (crit ? 2 : 1), (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), crit, 260);
+            this.damageEnemy(e, dmgBase * 1.4 * (crit ? 2 : 1), (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), crit, 260, true);
           }
         }
         break;
@@ -2344,7 +2488,7 @@ export class Game {
             e.slow = 1.6;
             e.vx += (dx / d) * 320;
             e.vy += (dy / d) * 320;
-            this.damageEnemy(e, dmgBase * 1.55, -dx / d, -dy / d, Math.random() < this.critChance(), 170);
+            this.damageEnemy(e, dmgBase * 1.55, -dx / d, -dy / d, Math.random() < this.critChance(), 170, true);
           }
         }
         break;
@@ -2373,7 +2517,7 @@ export class Game {
           }
           this.burst(e.x, e.y, '#6ef3ff', 10, 260, 'spark');
           e.slow = Math.max(e.slow, 1.0);
-          this.damageEnemy(e, dmg, dx / d, dy / d, Math.random() < this.critChance(), 200);
+          this.damageEnemy(e, dmg, dx / d, dy / d, Math.random() < this.critChance(), 200, true);
           lx = e.x;
           ly = e.y;
         });
@@ -2394,7 +2538,7 @@ export class Game {
           const d = Math.hypot(dx, dy) || 1;
           if (d < 260 + e.r) {
             e.slow = Math.max(e.slow, 2.0);
-            this.damageEnemy(e, dmgBase * 2.2, dx / d, dy / d, Math.random() < this.critChance(), 480);
+            this.damageEnemy(e, dmgBase * 2.2, dx / d, dy / d, Math.random() < this.critChance(), 480, true);
           }
         }
         break;
@@ -2423,7 +2567,7 @@ export class Game {
             const dx = e.x - p.x;
             const dy = e.y - p.y;
             const d = Math.hypot(dx, dy) || 1;
-            this.damageEnemy(e, dmgBase * 1.8, dx / d, dy / d, Math.random() < this.critChance(), 260);
+            this.damageEnemy(e, dmgBase * 1.8, dx / d, dy / d, Math.random() < this.critChance(), 260, true);
           }
         }
         break;
@@ -2505,7 +2649,7 @@ export class Game {
             e.slow = 2;
             e.vx += (dx / d) * 520;
             e.vy += (dy / d) * 520;
-            this.damageEnemy(e, dmgBase * 0.6, dx / d, dy / d, false, 80);
+            this.damageEnemy(e, dmgBase * 0.6, dx / d, dy / d, false, 80, true);
           }
         }
         this.pushFeed('Pearl Tide: the sea takes back your wounds.', cls.color);
@@ -2559,7 +2703,7 @@ export class Game {
       const dy = e.y - p.y;
       const d = Math.hypot(dx, dy) || 1;
       this.part(e.x, e.y, 0, 0, 0.5, e.r * 1.3, '#b68cff', 'ring');
-      this.damageEnemy(e, dmg, dx / d, dy / d, false, 200);
+      this.damageEnemy(e, dmg, dx / d, dy / d, false, 200, true);
     }
   }
 
@@ -2720,7 +2864,7 @@ export class Game {
           const dx = e.x - p.x;
           const dy = e.y - p.y;
           const d = Math.hypot(dx, dy) || 1;
-          this.damageEnemy(e, dmgBase * 1.5, dx / d, dy / d, Math.random() < this.critChance(), 150);
+          this.damageEnemy(e, dmgBase * 1.5, dx / d, dy / d, Math.random() < this.critChance(), 150, true);
         }
       }
     }
@@ -2744,7 +2888,7 @@ export class Game {
           const dy = e.y - p.y;
           const d = Math.hypot(dx, dy) || 1;
           if (d < 170 + e.r) {
-            this.damageEnemy(e, dmgBase * 0.9, dx / d, dy / d, false, 220);
+            this.damageEnemy(e, dmgBase * 0.9, dx / d, dy / d, false, 220, true);
           }
         }
       }
@@ -2770,7 +2914,7 @@ export class Game {
           const d = Math.hypot(dx, dy) || 1;
           if (d < 150 + e.r) {
             e.slow = 1.2;
-            this.damageEnemy(e, dmgBase * 2.0, dx / d, dy / d, Math.random() < this.critChance(), 320);
+            this.damageEnemy(e, dmgBase * 2.0, dx / d, dy / d, Math.random() < this.critChance(), 320, true);
           }
         }
       }
@@ -2843,7 +2987,7 @@ export class Game {
           const d = Math.hypot(e.x - p.x, e.y - p.y);
           if (d < 168 + e.r) {
             e.slow = 0.6;
-            this.damageEnemy(e, cls.dmg * p.dmgMul * 0.55, (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), false, 60);
+            this.damageEnemy(e, cls.dmg * p.dmgMul * 0.55, (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), false, 60, true);
           }
         }
       }
@@ -2901,6 +3045,7 @@ export class Game {
         continue;
       }
       e.flash = Math.max(0, e.flash - dt * 5);
+      e.shieldFlash = Math.max(0, e.shieldFlash - dt * 4);
       if (!p || p.dead) {
         e.vx *= 1 - Math.min(1, dt * 2);
         e.vy *= 1 - Math.min(1, dt * 2);
@@ -2927,6 +3072,7 @@ export class Game {
       if (e.frozen > 0) e.frozen -= dt;
       if (e.slow > 0) e.slow -= dt;
       e.atkCd -= dt;
+      const roleCaster = e.role === 'summoner' || e.role === 'artillery' || e.role === 'healer';
       switch (e.kind) {
         case 'husk':
           mx = ux; my = uy;
@@ -2943,7 +3089,7 @@ export class Game {
           mx = ux * dir - uy * strafe * 0.7;
           my = uy * dir + ux * strafe * 0.7;
           e.shootT -= dt;
-          if (e.shootT <= 0 && d < 460) {
+          if (!roleCaster && e.shootT <= 0 && d < 460) {
             e.shootT = rand(Math.max(1.25, 2.2 - this.wave * 0.06), Math.max(1.7, 3.0 - this.wave * 0.05));
             this.shots.push({
               x: e.x + ux * 20, y: e.y + uy * 20,
@@ -2979,7 +3125,7 @@ export class Game {
           mx = ux * dir - uy * strafe * 0.8;
           my = uy * dir + ux * strafe * 0.8;
           e.shootT -= dt;
-          if (e.shootT <= 0 && d < 520) {
+          if (!roleCaster && e.shootT <= 0 && d < 520) {
             e.shootT = rand(Math.max(1.1, 2.0 - this.wave * 0.04), Math.max(1.6, 2.6 - this.wave * 0.04));
             for (let i = -1; i <= 1; i++) {
               const a = Math.atan2(uy, ux) + i * 0.22;
@@ -3032,7 +3178,7 @@ export class Game {
             mx = ux * 0.6 - uy * w;
             my = uy * 0.6 + ux * w;
             e.shootT -= dt;
-            if (e.shootT <= 0 && d < 380) {
+            if (e.role !== 'assassin' && e.shootT <= 0 && d < 380) {
               e.shootT = rand(1.8, 2.8);
               e.dashT = 0.28;
               e.vx = ux * 620;
@@ -3076,7 +3222,7 @@ export class Game {
           mx = ux * 0.9 - uy * w;
           my = uy * 0.9 + ux * w;
           e.shootT -= dt;
-          if (e.shootT <= 0 && d < 480) {
+          if (!roleCaster && e.shootT <= 0 && d < 480) {
             e.shootT = rand(2.0, 2.8);
             const base = Math.atan2(uy, ux);
             for (let i = -2; i <= 2; i++) {
@@ -3126,7 +3272,8 @@ export class Game {
                 atkCd: 1, seed: rand(0, TAU), elite: false, name: def.name,
                 shootT: 2, phase: 0, windT: 0, lungeT: 0,
                 minionT: 99, faceA: 0, telegraphed: false, launched: false, bossAttackWindup: false,
-                variant: 0, dashT: 0, dead: false,
+                variant: 0, dashT: 0, role: null, roleT: 0, shieldFlash: 0, blinkX: 0, blinkY: 0,
+                dead: false,
               });
               this.burst(e.x + Math.cos(a) * 60, e.y + Math.sin(a) * 60, def.color, 6, 150, 'spark');
             }
@@ -3223,6 +3370,113 @@ export class Game {
             my = uy * 0.3;
           }
           break;
+        }
+      }
+      // Elite roles layer a single readable behaviour over the base enemy kind.
+      if (e.role && e.frozen <= 0) {
+        const roleDef = ELITE_ROLES[e.role];
+        e.roleT -= dt;
+        switch (e.role) {
+          case 'summoner': {
+            if (e.windT > 0) {
+              e.windT -= dt;
+              mx = 0; my = 0;
+              if (e.windT <= 0) {
+                e.windT = 0;
+                this.summonEliteMinions(e);
+                e.roleT = rand(8.5, 11.5);
+              }
+            } else if (e.roleT <= 0) {
+              e.windT = 0.75;
+              this.part(e.x, e.y, 0, 0, 0.75, e.r + 26, roleDef.color, 'ring');
+              this.sfx.play('rune');
+            }
+            break;
+          }
+          case 'assassin': {
+            if (e.windT > 0) {
+              e.windT -= dt;
+              mx = 0; my = 0;
+              if (e.windT <= 0) {
+                e.windT = 0;
+                const landing = sampleAssassinLanding(e.blinkX, e.blinkY);
+                this.burst(e.x, e.y, roleDef.color, 8, 200, 'spark');
+                e.x = clamp(landing.x, 40, ARENA_W - 40);
+                e.y = clamp(landing.y, 40, ARENA_H - 40);
+                e.vx = 0; e.vy = 0;
+                e.atkCd = Math.max(e.atkCd, 0.5);
+                this.burst(e.x, e.y, roleDef.color, 10, 220, 'spark');
+                this.part(e.x, e.y, 0, 0, 0.45, e.r * 1.5, roleDef.color, 'ring');
+                this.sfx.play('dash');
+                e.roleT = rand(4.2, 6.2);
+              }
+            } else if (e.roleT <= 0 && d > 150 && d < 720) {
+              const side = Math.sin(this.time * 2 + e.seed) > 0 ? 1 : -1;
+              e.blinkX = clamp(target.x + ux * 105 - uy * 60 * side, 45, ARENA_W - 45);
+              e.blinkY = clamp(target.y + uy * 105 + ux * 60 * side, 45, ARENA_H - 45);
+              e.windT = ASSASSIN_TELEPORT.windup;
+              this.part(
+                e.blinkX, e.blinkY, 0, 0, ASSASSIN_TELEPORT.windup,
+                ASSASSIN_TELEPORT.areaRadius * 0.45, roleDef.color, 'ring',
+              );
+              this.sfx.play('rune');
+            }
+            break;
+          }
+          case 'artillery': {
+            if (e.windT > 0) {
+              e.windT -= dt;
+              mx = 0; my = 0;
+              if (e.windT <= 0) {
+                e.windT = 0;
+                this.fireArtilleryShell(e);
+                e.roleT = rand(3.4, 4.8);
+              }
+            } else {
+              if (d < 250) { mx = -ux; my = -uy; }
+              else if (d > 430) { mx = ux * 0.6; my = uy * 0.6; }
+              else {
+                const strafe = Math.sin(this.time * 1.3 + e.seed) > 0 ? 1 : -1;
+                mx = -uy * strafe * 0.55;
+                my = ux * strafe * 0.55;
+              }
+              if (e.roleT <= 0 && d < 580) {
+                e.windT = 0.7;
+                this.part(e.x, e.y, 0, 0, 0.7, e.r + 22, roleDef.color, 'ring');
+                this.sfx.play('rune');
+              }
+            }
+            break;
+          }
+          case 'healer': {
+            let anchor: Enemy | null = null;
+            let anchorScore = Infinity;
+            for (const other of this.enemies) {
+              if (other === e || other.dead || other.spawn > 0 || other.hp >= other.maxHp) continue;
+              if (Math.hypot(other.x - e.x, other.y - e.y) > 420) continue;
+              const threat = Math.hypot(other.x - p.x, other.y - p.y);
+              if (threat < anchorScore) { anchorScore = threat; anchor = other; }
+            }
+            if (anchor) {
+              const ax = anchor.x - e.x;
+              const ay = anchor.y - e.y;
+              const ad = Math.hypot(ax, ay) || 1;
+              if (ad > 150) { mx = ax / ad; my = ay / ad; }
+              else if (d < 240) { mx = -ux; my = -uy; }
+            } else {
+              const dir = d > 380 ? 1 : d < 280 ? -1 : 0;
+              const strafe = Math.sin(this.time * 1.1 + e.seed) * 0.35;
+              mx = ux * dir - uy * strafe;
+              my = uy * dir + ux * strafe;
+            }
+            if (e.roleT <= 0) {
+              e.roleT = 3.0;
+              this.healerPulse(e);
+            }
+            break;
+          }
+          default:
+            break; // shielded: passive aura, handled in damageEnemy
         }
       }
       const heavy = e.kind === 'brute' || e.kind === 'boss' || e.kind === 'golem' || e.kind === 'demon' || e.kind === 'dragon';
@@ -3893,6 +4147,9 @@ export class Game {
 
   private drawEnemy(c: CanvasRenderingContext2D, e: Enemy) {
     const def = ENEMIES[e.kind];
+    const roleDef = e.role ? ELITE_ROLES[e.role] : null;
+    const palette = e.role ? ELITE_PALETTES[e.role] : null;
+    const floating = e.role === 'summoner' || e.role === 'healer';
     const bossCol = e.kind === 'boss' ? ZONES[(e.variant ?? 0) % ZONES.length].bossColor : def.color;
     let col = e.kind === 'boss' ? bossCol : def.color;
     if (e.frozen > 0) col = mixHex(col, '#bfe6ff', 0.65);
@@ -3902,16 +4159,24 @@ export class Game {
     if (e.spawn > 0) {
       const k = 1 - e.spawn / 0.45;
       c.globalAlpha = k * 0.75;
-      c.strokeStyle = def.color;
+      c.strokeStyle = roleDef ? roleDef.color : def.color;
       c.lineWidth = 2;
       c.beginPath();
       c.arc(e.x, e.y, e.r * (2.2 - k * 1.4), 0, TAU);
       c.stroke();
     }
     // shadow
-    c.fillStyle = 'rgba(0,0,0,0.4)';
+    c.fillStyle = floating ? 'rgba(0,0,0,0.24)' : 'rgba(0,0,0,0.4)';
     c.beginPath();
-    c.ellipse(e.x, e.y + e.r * 0.85, e.r * 1.05, e.r * 0.38, 0, 0, TAU);
+    c.ellipse(
+      e.x,
+      e.y + e.r * (floating ? 0.95 : 0.85),
+      e.r * (floating ? 0.82 : 1.05),
+      e.r * (floating ? 0.3 : 0.38),
+      0,
+      0,
+      TAU,
+    );
     c.fill();
 
     if (e.kind === 'boss') this.drawGlow(c, e.x, e.y, e.r * 1.9, bossCol, 0.35);
@@ -3935,13 +4200,26 @@ export class Game {
       c.stroke();
     }
     if (e.elite) {
-      const halo = 1 + Math.sin(this.time * 5 + e.seed) * 0.08;
-      this.drawGlow(c, 0, 0, e.r * 1.65 * halo, '#ffd24a', 0.23);
-      c.strokeStyle = 'rgba(255,210,74,0.65)'; c.lineWidth = 1.4; c.setLineDash([3, 3]);
+      const halo = this.reducedMotion ? 1 : 1 + Math.sin(this.time * 5 + e.seed) * 0.08;
+      const eliteCol = roleDef ? roleDef.color : '#ffd24a';
+      this.drawGlow(c, 0, 0, e.r * 1.65 * halo, eliteCol, roleDef ? 0.16 : 0.23);
+      c.strokeStyle = rgba(eliteCol, roleDef ? 0.55 : 0.65); c.lineWidth = 1.4; c.setLineDash([3, 3]);
       c.beginPath(); c.arc(0, 0, e.r + 5, 0, TAU); c.stroke(); c.setLineDash([]);
     }
+    if (roleDef) {
+      const sigil = 0.4 + Math.sin(this.time * 3.2 + e.seed) * 0.18;
+      c.strokeStyle = rgba(roleDef.color, sigil);
+      c.lineWidth = 1.6;
+      c.setLineDash([4, 5]);
+      c.lineDashOffset = -this.time * 18;
+      c.beginPath(); c.arc(0, 0, e.r + 11, 0, TAU); c.stroke();
+      c.setLineDash([]);
+      c.lineDashOffset = 0;
+    }
 
-    switch (e.kind) {
+    if (palette) {
+      this.drawEliteBody(c, e, palette);
+    } else switch (e.kind) {
       case 'husk': {
         const wob = Math.sin(this.time * 5 + e.seed) * 0.08;
         c.fillStyle = mixHex(def.color, '#15231d', 0.6);
@@ -4245,6 +4523,169 @@ export class Game {
     }
     c.restore();
 
+    // Role-specific readability cues (drawn in world space so they stay stable).
+    if (roleDef) {
+      switch (e.role) {
+        case 'shielded': {
+          const flash = clamp(e.shieldFlash, 0, 1);
+          const rad = e.r * 1.58;
+          const a0 = e.faceA - 0.82;
+          const a1 = e.faceA + 0.82;
+          c.strokeStyle = rgba(roleDef.color, 0.42 + flash * 0.45);
+          c.lineWidth = 5 + flash * 3;
+          c.beginPath(); c.arc(e.x, e.y, rad, a0, a1); c.stroke();
+          c.strokeStyle = rgba('#e9fbff', 0.28 + flash * 0.5);
+          c.lineWidth = 2;
+          c.beginPath(); c.arc(e.x, e.y, rad + 5, a0 + 0.08, a1 - 0.08); c.stroke();
+          // Three ward ticks sit just beyond the shield rim.
+          c.strokeStyle = rgba(roleDef.color, 0.32 + flash * 0.4);
+          for (let i = -1; i <= 1; i++) {
+            const a = e.faceA + i * 0.5;
+            c.beginPath();
+            c.moveTo(e.x + Math.cos(a) * (rad + 7), e.y + Math.sin(a) * (rad + 7));
+            c.lineTo(e.x + Math.cos(a) * (rad + 14), e.y + Math.sin(a) * (rad + 14));
+            c.stroke();
+          }
+          break;
+        }
+        case 'assassin': {
+          if (e.windT > 0) {
+            const pulse = 0.45 + Math.sin(this.time * 18) * 0.25;
+            const radius = ASSASSIN_TELEPORT.areaRadius;
+            // Tether the warning to the general area, not a precise landing pixel.
+            c.strokeStyle = rgba(roleDef.color, 0.22);
+            c.lineWidth = 1;
+            c.setLineDash([4, 10]);
+            c.beginPath(); c.moveTo(e.x, e.y); c.lineTo(e.blinkX, e.blinkY); c.stroke();
+            c.setLineDash([]);
+            // Shaded landing area: readable, but deliberately blurry as a target.
+            c.fillStyle = rgba(roleDef.color, 0.045 + pulse * 0.035);
+            c.beginPath(); c.arc(e.blinkX, e.blinkY, radius, 0, TAU); c.fill();
+            c.strokeStyle = rgba(roleDef.color, pulse + 0.22);
+            c.lineWidth = 1.6;
+            c.setLineDash([6, 8]);
+            c.lineDashOffset = -this.time * 22;
+            c.beginPath(); c.arc(e.blinkX, e.blinkY, radius, 0, TAU); c.stroke();
+            c.setLineDash([]);
+            c.lineDashOffset = 0;
+            // Inward ticks keep the "incoming" warning legible without a crosshair.
+            c.strokeStyle = rgba(roleDef.color, pulse + 0.18);
+            c.lineWidth = 2;
+            for (let i = 0; i < 4; i++) {
+              const a = this.time * 1.1 + (i / 4) * TAU + e.seed;
+              c.beginPath();
+              c.moveTo(e.blinkX + Math.cos(a) * (radius + 5), e.blinkY + Math.sin(a) * (radius + 5));
+              c.lineTo(e.blinkX + Math.cos(a) * (radius - 7), e.blinkY + Math.sin(a) * (radius - 7));
+              c.stroke();
+            }
+            // Shadow echoes trace the blink path without marking the exact landing pixel.
+            if (!this.reducedMotion) {
+              const blinkA = Math.atan2(e.blinkY - e.y, e.blinkX - e.x);
+              for (let i = 1; i <= 2; i++) {
+                const t = i / 3;
+                const gx = e.x + (e.blinkX - e.x) * t;
+                const gy = e.y + (e.blinkY - e.y) * t;
+                const alpha = Math.max(0, (0.17 - i * 0.045) * (0.7 + Math.sin(this.time * 22 + i * 2) * 0.3));
+                c.save();
+                c.translate(gx, gy);
+                c.rotate(blinkA);
+                c.globalAlpha = alpha;
+                c.fillStyle = roleDef.color;
+                c.beginPath();
+                c.moveTo(e.r * 0.7, 0);
+                c.quadraticCurveTo(0, -e.r * 0.35, -e.r * 0.4, -e.r * 0.18);
+                c.quadraticCurveTo(-e.r * 0.5, 0, -e.r * 0.4, e.r * 0.18);
+                c.quadraticCurveTo(0, e.r * 0.35, e.r * 0.7, 0);
+                c.closePath();
+                c.fill();
+                c.strokeStyle = roleDef.color;
+                c.lineWidth = 1.5;
+                c.beginPath();
+                c.moveTo(0, 0); c.lineTo(e.r * 0.9, -e.r * 0.4);
+                c.moveTo(0, 0); c.lineTo(e.r * 0.9, e.r * 0.4);
+                c.stroke();
+                c.restore();
+              }
+              c.globalAlpha = 1;
+            }
+          }
+          break;
+        }
+        case 'artillery': {
+          if (e.windT > 0 && this.p && !this.p.dead) {
+            const p = this.p;
+            const t = 0.45 + Math.sin(this.time * 16) * 0.22;
+            c.strokeStyle = rgba(roleDef.color, t);
+            c.lineWidth = 2;
+            const radius = 38 + (1 - clamp(e.windT / 0.7, 0, 1)) * 10;
+            c.beginPath(); c.arc(p.x, p.y, radius, 0, TAU); c.stroke();
+            c.beginPath();
+            c.moveTo(p.x - 52, p.y); c.lineTo(p.x - 32, p.y);
+            c.moveTo(p.x + 32, p.y); c.lineTo(p.x + 52, p.y);
+            c.moveTo(p.x, p.y - 52); c.lineTo(p.x, p.y - 32);
+            c.moveTo(p.x, p.y + 32); c.lineTo(p.x, p.y + 52);
+            c.stroke();
+            c.setLineDash([5, 8]);
+            c.beginPath(); c.moveTo(e.x, e.y); c.lineTo(p.x, p.y); c.stroke();
+            c.setLineDash([]);
+          }
+          break;
+        }
+        case 'summoner': {
+          const pulse = this.reducedMotion ? 0.55 : 0.5 + Math.sin(this.time * 3.4 + e.seed) * 0.2;
+          const rad = e.r * 1.68;
+          c.save();
+          c.translate(e.x, e.y);
+          c.rotate(this.reducedMotion ? 0 : this.time * 0.55);
+          c.strokeStyle = rgba(roleDef.color, 0.18 + pulse * 0.18);
+          c.lineWidth = 1.6;
+          c.setLineDash([5, 9]);
+          c.beginPath(); c.arc(0, 0, rad, 0, TAU); c.stroke();
+          c.setLineDash([]);
+          c.strokeStyle = rgba(roleDef.color, 0.3 + pulse * 0.2);
+          c.lineWidth = 2;
+          for (let i = 0; i < 4; i++) {
+            const a = (i / 4) * TAU;
+            c.beginPath();
+            c.moveTo(Math.cos(a) * rad * 0.86, Math.sin(a) * rad * 0.86);
+            c.lineTo(Math.cos(a) * (rad + 7), Math.sin(a) * (rad + 7));
+            c.stroke();
+          }
+          c.restore();
+          if (e.windT > 0) {
+            const prog = 1 - clamp(e.windT / 0.75, 0, 1);
+            c.strokeStyle = rgba(roleDef.color, 0.55 + prog * 0.3);
+            c.lineWidth = 2.5;
+            c.beginPath(); c.arc(e.x, e.y, (e.r + 18) * (0.6 + prog * 0.8), 0, TAU); c.stroke();
+          }
+          break;
+        }
+        case 'healer': {
+          const pulse = this.reducedMotion ? 0.55 : 0.5 + Math.sin(this.time * 2.8 + e.seed) * 0.2;
+          const rad = e.r * 1.5;
+          c.save();
+          c.translate(e.x, e.y);
+          c.rotate(this.reducedMotion ? 0 : -this.time * 0.45);
+          c.strokeStyle = rgba(roleDef.color, 0.2 + pulse * 0.16);
+          c.lineWidth = 1.5;
+          c.setLineDash([4, 8]);
+          c.beginPath(); c.arc(0, 0, rad, 0, TAU); c.stroke();
+          c.setLineDash([]);
+          c.strokeStyle = rgba(roleDef.color, 0.32 + pulse * 0.2);
+          c.lineWidth = 2;
+          for (let i = 0; i < 4; i++) {
+            const a = (i / 4) * TAU;
+            c.beginPath();
+            c.moveTo(Math.cos(a) * (rad - 4), Math.sin(a) * (rad - 4));
+            c.lineTo(Math.cos(a) * (rad + 6), Math.sin(a) * (rad + 6));
+            c.stroke();
+          }
+          c.restore();
+          break;
+        }
+      }
+    }
+
     // frozen crystals
     if (e.frozen > 0) {
       c.fillStyle = 'rgba(191,230,255,0.85)';
@@ -4275,8 +4716,658 @@ export class Game {
       c.textAlign = 'center';
       c.fillStyle = 'rgba(0,0,0,0.7)';
       c.fillText(e.name, e.x + 1, e.y - e.r - 17);
-      c.fillStyle = '#ffd97a';
+      c.fillStyle = roleDef ? roleDef.color : '#ffd97a';
       c.fillText(e.name, e.x, e.y - e.r - 18);
+    }
+  }
+
+  /* --------------------------- elite visuals -------------------------- */
+
+  /** Apply the existing frozen/flash damage treatment to an elite palette colour. */
+  private eliteTint(e: Enemy, color: string): string {
+    if (e.flash > 0) return mixHex(color, '#ffffff', e.flash * 0.8);
+    if (e.frozen > 0) return mixHex(color, '#bfe6ff', 0.6);
+    return color;
+  }
+
+  private drawEliteBody(c: CanvasRenderingContext2D, e: Enemy, pal: ElitePalette) {
+    switch (e.role) {
+      case 'shielded': this.drawShieldedElite(c, e, pal); break;
+      case 'summoner': this.drawSummonerElite(c, e, pal); break;
+      case 'assassin': this.drawAssassinElite(c, e, pal); break;
+      case 'artillery': this.drawArtilleryElite(c, e, pal); break;
+      case 'healer': this.drawHealerElite(c, e, pal); break;
+      default: break;
+    }
+  }
+
+  /** Shieldbearer: broad armoured guardian with an oversized rune tower shield. */
+  private drawShieldedElite(c: CanvasRenderingContext2D, e: Enemy, pal: ElitePalette) {
+    const r = e.r;
+    const motion = !this.reducedMotion;
+    const bob = motion ? Math.sin(this.time * 2.1 + e.seed) * 1.6 : 0;
+    const sway = motion ? Math.sin(this.time * 1.45 + e.seed) * 0.03 : 0;
+    const block = clamp(e.shieldFlash, 0, 1);
+    const T = (color: string) => this.eliteTint(e, color);
+
+    c.save();
+    c.translate(0, bob);
+    c.rotate(e.faceA + sway);
+
+    // Heavy back cape.
+    c.fillStyle = T(pal.dark);
+    c.beginPath();
+    c.moveTo(-r * 0.55, -r * 0.85);
+    c.quadraticCurveTo(-r * 1.55, -r * 0.2, -r * 1.25, r * 0.95);
+    c.lineTo(-r * 0.15, r * 0.8);
+    c.lineTo(r * 0.1, -r * 0.75);
+    c.closePath();
+    c.fill();
+
+    // Armoured legs.
+    c.fillStyle = T(pal.metal);
+    c.beginPath();
+    c.moveTo(-r * 0.62, r * 0.55);
+    c.lineTo(-r * 0.18, r * 0.55);
+    c.lineTo(-r * 0.24, r * 1.02);
+    c.lineTo(-r * 0.7, r * 1.02);
+    c.closePath();
+    c.fill();
+    c.beginPath();
+    c.moveTo(r * 0.08, r * 0.55);
+    c.lineTo(r * 0.5, r * 0.55);
+    c.lineTo(r * 0.58, r * 1.02);
+    c.lineTo(r * 0.14, r * 1.02);
+    c.closePath();
+    c.fill();
+
+    // Broad torso plate.
+    c.fillStyle = T(pal.secondary);
+    c.beginPath();
+    c.moveTo(-r * 0.74, -r * 0.55);
+    c.lineTo(-r * 0.2, -r * 0.98);
+    c.lineTo(r * 0.46, -r * 0.72);
+    c.lineTo(r * 0.64, r * 0.24);
+    c.lineTo(r * 0.28, r * 0.78);
+    c.lineTo(-r * 0.62, r * 0.72);
+    c.closePath();
+    c.fill();
+    c.strokeStyle = T(pal.primary);
+    c.lineWidth = 2.2;
+    c.stroke();
+
+    c.strokeStyle = rgba(pal.dark, 0.65);
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(-r * 0.55, -r * 0.08); c.lineTo(r * 0.45, -r * 0.18);
+    c.moveTo(-r * 0.52, r * 0.28); c.lineTo(r * 0.38, r * 0.2);
+    c.stroke();
+
+    // Oversized pauldrons.
+    c.fillStyle = T(pal.primary);
+    c.beginPath();
+    c.ellipse(-r * 0.62, -r * 0.6, r * 0.42, r * 0.28, -0.28, 0, TAU);
+    c.ellipse(r * 0.48, -r * 0.6, r * 0.42, r * 0.28, 0.28, 0, TAU);
+    c.fill();
+    c.strokeStyle = T(pal.dark);
+    c.lineWidth = 1.6;
+    c.stroke();
+
+    // Helm with crest and glowing visor.
+    c.fillStyle = T(pal.metal);
+    c.beginPath();
+    c.arc(0, -r * 0.8, r * 0.44, Math.PI, TAU);
+    c.lineTo(r * 0.44, -r * 0.48);
+    c.lineTo(-r * 0.44, -r * 0.48);
+    c.closePath();
+    c.fill();
+    c.fillStyle = T(pal.dark);
+    c.fillRect(-r * 0.38, -r * 0.75, r * 0.76, r * 0.18);
+    c.fillStyle = T(pal.accent);
+    c.globalAlpha = 0.7 + block * 0.3;
+    c.fillRect(-r * 0.3, -r * 0.69, r * 0.6, r * 0.06);
+    c.globalAlpha = 1;
+    c.fillStyle = T(pal.primary);
+    c.beginPath();
+    c.moveTo(-r * 0.1, -r * 1.24);
+    c.lineTo(r * 0.12, -r * 0.88);
+    c.lineTo(-r * 0.12, -r * 0.88);
+    c.closePath();
+    c.fill();
+
+    // Tower shield, held toward the facing direction.
+    c.save();
+    c.translate(r * 0.92, r * 0.02);
+    c.rotate(-0.08 + sway * 0.6);
+    const sw = r * 0.92;
+    const sh = r * 1.45;
+    this.drawGlow(c, 0, 0, r * 1.3, pal.accent, 0.16 + block * 0.38);
+    c.fillStyle = T(pal.secondary);
+    c.beginPath();
+    c.moveTo(-sw * 0.55, -sh * 0.85);
+    c.quadraticCurveTo(0, -sh * 1.02, sw * 0.5, -sh * 0.85);
+    c.lineTo(sw * 0.62, sh * 0.34);
+    c.lineTo(0, sh * 0.96);
+    c.lineTo(-sw * 0.62, sh * 0.34);
+    c.closePath();
+    c.fill();
+    c.strokeStyle = T(pal.metal);
+    c.lineWidth = 3.2;
+    c.stroke();
+    c.fillStyle = T(pal.primary);
+    c.globalAlpha = 0.8;
+    c.beginPath();
+    c.moveTo(-sw * 0.4, -sh * 0.66);
+    c.quadraticCurveTo(0, -sh * 0.82, sw * 0.36, -sh * 0.66);
+    c.lineTo(sw * 0.46, sh * 0.2);
+    c.lineTo(0, sh * 0.72);
+    c.lineTo(-sw * 0.46, sh * 0.2);
+    c.closePath();
+    c.fill();
+    c.globalAlpha = 1;
+    const rune = this.reducedMotion ? 0.7 : 0.55 + Math.sin(this.time * 3.4 + e.seed) * 0.2;
+    c.strokeStyle = T(pal.accent);
+    c.globalAlpha = clamp(rune + block * 0.3, 0, 1);
+    c.lineWidth = 2.2;
+    c.beginPath();
+    c.moveTo(0, -sh * 0.3);
+    c.lineTo(sw * 0.3, 0);
+    c.lineTo(0, sh * 0.3);
+    c.lineTo(-sw * 0.3, 0);
+    c.closePath();
+    c.stroke();
+    c.beginPath();
+    c.arc(0, 0, r * 0.11, 0, TAU);
+    c.stroke();
+    c.globalAlpha = 1;
+    c.restore();
+
+    c.restore();
+  }
+
+  /** Grave Summoner: hovering hooded veil with orbiting sigils and summoning threads. */
+  private drawSummonerElite(c: CanvasRenderingContext2D, e: Enemy, pal: ElitePalette) {
+    const r = e.r;
+    const motion = !this.reducedMotion;
+    const bob = motion ? Math.sin(this.time * 2.3 + e.seed) * 4 : 0;
+    const sway = motion ? Math.sin(this.time * 1.5 + e.seed) * 0.07 : 0;
+    const charge = e.windT > 0 ? 1 - clamp(e.windT / 0.75, 0, 1) : 0;
+    const T = (color: string) => this.eliteTint(e, color);
+
+    c.save();
+    c.translate(0, bob);
+    c.rotate(sway);
+
+    // Back sigil halo.
+    c.save();
+    c.rotate(motion ? this.time * 0.25 : 0);
+    this.drawGlow(c, 0, -r * 0.1, r * 1.55, pal.primary, 0.12 + charge * 0.18);
+    c.strokeStyle = rgba(pal.primary, 0.28 + charge * 0.28);
+    c.lineWidth = 1.4;
+    c.setLineDash([3, 7]);
+    c.beginPath(); c.arc(0, -r * 0.1, r * 1.28, 0, TAU); c.stroke();
+    c.setLineDash([]);
+    c.restore();
+
+    // Tattered outer veil.
+    c.fillStyle = T(pal.dark);
+    c.beginPath();
+    c.moveTo(0, -r * 1.42);
+    c.bezierCurveTo(r * 0.86, -r * 1.12, r * 1.04, -r * 0.25, r * 0.76, r * 0.54);
+    c.lineTo(r * 0.5, r * 0.98);
+    c.lineTo(r * 0.22, r * 0.56);
+    c.lineTo(0, r * 1.08);
+    c.lineTo(-r * 0.22, r * 0.52);
+    c.lineTo(-r * 0.56, r * 0.98);
+    c.lineTo(-r * 0.8, r * 0.4);
+    c.bezierCurveTo(-r * 1.04, -r * 0.3, -r * 0.82, -r * 1.1, 0, -r * 1.42);
+    c.closePath();
+    c.fill();
+
+    // Inner robe.
+    c.fillStyle = T(pal.secondary);
+    c.beginPath();
+    c.moveTo(0, -r * 1.12);
+    c.bezierCurveTo(r * 0.6, -r * 0.9, r * 0.62, -r * 0.1, r * 0.46, r * 0.5);
+    c.lineTo(0, r * 0.86);
+    c.lineTo(-r * 0.46, r * 0.5);
+    c.bezierCurveTo(-r * 0.62, -r * 0.1, -r * 0.6, -r * 0.9, 0, -r * 1.12);
+    c.closePath();
+    c.fill();
+    c.strokeStyle = rgba(pal.primary, 0.32);
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(-r * 0.28, -r * 0.35); c.lineTo(0, r * 0.7);
+    c.moveTo(r * 0.28, -r * 0.35); c.lineTo(0, r * 0.7);
+    c.stroke();
+
+    // Hood and void face.
+    c.fillStyle = T(pal.primary);
+    c.beginPath(); c.arc(0, -r * 0.66, r * 0.72, 0, TAU); c.fill();
+    c.fillStyle = T(pal.dark);
+    c.beginPath(); c.arc(0, -r * 0.62, r * 0.52, 0, TAU); c.fill();
+    c.fillStyle = '#050309';
+    c.beginPath(); c.ellipse(0, -r * 0.58, r * 0.3, r * 0.4, 0, 0, TAU); c.fill();
+    c.fillStyle = T(pal.accent);
+    c.beginPath();
+    c.arc(-r * 0.12, -r * 0.64, 2.4, 0, TAU);
+    c.arc(r * 0.12, -r * 0.64, 2.4, 0, TAU);
+    c.fill();
+
+    // Veil gem.
+    const core = motion ? 0.65 + Math.sin(this.time * 4 + e.seed) * 0.2 : 0.7;
+    this.drawGlow(c, 0, r * 0.12, r * 0.5, pal.primary, 0.3 + charge * 0.2);
+    c.fillStyle = T(pal.accent);
+    c.beginPath(); c.arc(0, r * 0.12, 3 + core * 1.4, 0, TAU); c.fill();
+
+    // Thin arms and clawed hands.
+    c.strokeStyle = T(pal.secondary);
+    c.lineWidth = 3.4;
+    c.lineCap = 'round';
+    c.beginPath(); c.moveTo(-r * 0.5, -r * 0.2); c.quadraticCurveTo(-r * 0.95, r * 0.05, -r * 0.8, r * 0.55); c.stroke();
+    c.beginPath(); c.moveTo(r * 0.5, -r * 0.2); c.quadraticCurveTo(r * 0.95, r * 0.05, r * 0.8, r * 0.55); c.stroke();
+    c.fillStyle = T(pal.metal);
+    c.beginPath();
+    c.arc(-r * 0.8, r * 0.58, 2.4, 0, TAU);
+    c.arc(r * 0.8, r * 0.58, 2.4, 0, TAU);
+    c.fill();
+
+    // Orbiting sigils.
+    for (let i = 0; i < 3; i++) {
+      const a = (motion ? this.time * 1.5 : 0) + (i / 3) * TAU + e.seed;
+      const sx = Math.cos(a) * r * 1.35;
+      const sy = -r * 0.32 + Math.sin(a) * r * 0.52;
+      if (charge > 0) {
+        c.strokeStyle = rgba(pal.accent, 0.18 + charge * 0.35);
+        c.lineWidth = 1.2;
+        c.beginPath(); c.moveTo(0, r * 0.12); c.lineTo(sx, sy); c.stroke();
+      }
+      this.drawGlow(c, sx, sy, r * 0.28, pal.accent, 0.25);
+      c.save();
+      c.translate(sx, sy);
+      c.rotate(a * 0.7);
+      c.fillStyle = T(pal.accent);
+      c.beginPath();
+      c.moveTo(0, -4); c.lineTo(3, 0); c.lineTo(0, 4); c.lineTo(-3, 0);
+      c.closePath();
+      c.fill();
+      c.restore();
+    }
+
+    c.restore();
+  }
+
+  /** Veil Assassin: lean shadow wraith with twin blades, smoke, and blink-echoes. */
+  private drawAssassinElite(c: CanvasRenderingContext2D, e: Enemy, pal: ElitePalette) {
+    const r = e.r;
+    const motion = !this.reducedMotion;
+    const flick = motion ? 0.82 + Math.sin(this.time * 9 + e.seed) * 0.12 : 1;
+    const bob = motion ? Math.sin(this.time * 3.1 + e.seed) * 2 : 0;
+    const lean = motion ? Math.sin(this.time * 2.4 + e.seed) * 0.04 : 0;
+    const T = (color: string) => this.eliteTint(e, color);
+
+    c.save();
+    c.translate(0, bob);
+    c.rotate(e.faceA + lean);
+    c.globalAlpha = flick;
+
+    // Trailing shadow scarf.
+    c.fillStyle = T(pal.dark);
+    c.beginPath();
+    c.moveTo(-r * 0.2, -r * 0.5);
+    c.quadraticCurveTo(-r * 1.35, -r * 0.85, -r * 1.9, -r * 0.12);
+    c.quadraticCurveTo(-r * 1.2, r * 0.1, -r * 0.45, r * 0.3);
+    c.closePath();
+    c.fill();
+
+    // Smoke wisps.
+    c.strokeStyle = rgba(pal.primary, 0.3);
+    c.lineWidth = 2.2;
+    c.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const off = motion ? Math.sin(this.time * 3.6 + i * 2 + e.seed) * r * 0.18 : 0;
+      c.beginPath();
+      c.moveTo(-r * 0.5, -r * 0.18 + i * r * 0.26);
+      c.quadraticCurveTo(-r * 1.1, -r * 0.55 + i * r * 0.3 + off, -r * 1.7, -r * 0.05 + i * r * 0.34);
+      c.stroke();
+    }
+
+    // Lean body.
+    c.fillStyle = T(pal.secondary);
+    c.beginPath();
+    c.moveTo(r * 0.88, 0);
+    c.quadraticCurveTo(r * 0.2, -r * 0.58, -r * 0.36, -r * 0.34);
+    c.quadraticCurveTo(-r * 0.62, 0, -r * 0.3, r * 0.42);
+    c.quadraticCurveTo(r * 0.22, r * 0.52, r * 0.88, 0);
+    c.closePath();
+    c.fill();
+    c.strokeStyle = rgba(pal.primary, 0.5);
+    c.lineWidth = 1.4;
+    c.stroke();
+    c.fillStyle = T(pal.primary);
+    c.beginPath();
+    c.moveTo(r * 0.72, 0);
+    c.quadraticCurveTo(r * 0.12, -r * 0.34, -r * 0.22, -r * 0.16);
+    c.quadraticCurveTo(-r * 0.4, 0, -r * 0.14, r * 0.22);
+    c.quadraticCurveTo(r * 0.22, r * 0.26, r * 0.72, 0);
+    c.closePath();
+    c.fill();
+
+    // Hood and eye slits.
+    c.fillStyle = T(pal.dark);
+    c.beginPath(); c.arc(r * 0.58, -r * 0.1, r * 0.34, 0, TAU); c.fill();
+    c.strokeStyle = rgba(pal.primary, 0.6);
+    c.lineWidth = 1.4;
+    c.stroke();
+    c.fillStyle = T(pal.accent);
+    c.beginPath();
+    c.ellipse(r * 0.68, -r * 0.15, r * 0.07, r * 0.04, 0.2, 0, TAU);
+    c.ellipse(r * 0.68, r * 0.02, r * 0.07, r * 0.04, -0.2, 0, TAU);
+    c.fill();
+
+    // Neck scarf streaming back.
+    c.strokeStyle = rgba(pal.primary, 0.45);
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(r * 0.34, -r * 0.02);
+    c.quadraticCurveTo(-r * 0.2, -r * 0.15, -r * 0.75, -r * 0.02);
+    c.stroke();
+
+    // Twin curved blades.
+    c.fillStyle = T(pal.metal);
+    c.beginPath();
+    c.moveTo(r * 0.16, -r * 0.12);
+    c.quadraticCurveTo(r * 0.86, -r * 0.95, r * 1.44, -r * 0.58);
+    c.quadraticCurveTo(r * 0.72, -r * 0.5, r * 0.24, r * 0.04);
+    c.closePath();
+    c.fill();
+    c.beginPath();
+    c.moveTo(r * 0.16, r * 0.1);
+    c.quadraticCurveTo(r * 0.82, r * 0.9, r * 1.4, r * 0.52);
+    c.quadraticCurveTo(r * 0.7, r * 0.46, r * 0.22, -r * 0.06);
+    c.closePath();
+    c.fill();
+    c.strokeStyle = rgba(pal.accent, 0.75);
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(r * 0.3, -r * 0.16);
+    c.quadraticCurveTo(r * 0.86, -r * 0.72, r * 1.33, -r * 0.55);
+    c.stroke();
+    c.beginPath();
+    c.moveTo(r * 0.3, r * 0.14);
+    c.quadraticCurveTo(r * 0.82, r * 0.68, r * 1.3, r * 0.5);
+    c.stroke();
+
+    c.globalAlpha = 1;
+    c.restore();
+  }
+
+  /** Siege Artillerist: corrupted quadruped chassis with a glowing siege cannon. */
+  private drawArtilleryElite(c: CanvasRenderingContext2D, e: Enemy, pal: ElitePalette) {
+    const r = e.r;
+    const motion = !this.reducedMotion;
+    const breathe = motion ? Math.sin(this.time * 1.9 + e.seed) * 2 : 0;
+    const charge = e.windT > 0 ? 1 - clamp(e.windT / 0.7, 0, 1) : 0;
+    const T = (color: string) => this.eliteTint(e, color);
+
+    c.save();
+    c.translate(0, breathe);
+
+    // Four armoured legs.
+    const feet: [number, number][] = [[-1.18, 0.52], [-0.55, 0.98], [0.55, 0.98], [1.18, 0.52]];
+    c.strokeStyle = T(pal.metal);
+    c.lineWidth = Math.max(3, r * 0.18);
+    c.lineCap = 'round';
+    for (let i = 0; i < feet.length; i++) {
+      const [fx, fy] = feet[i];
+      const step = motion ? Math.sin(this.time * 4.2 + e.seed + i * 1.7) * r * 0.08 : 0;
+      c.beginPath();
+      c.moveTo(fx * r * 0.34, r * 0.08);
+      c.lineTo(fx * r * 0.78 + step, r * 0.46);
+      c.lineTo(fx * r + step, fy * r);
+      c.stroke();
+      c.fillStyle = T(pal.dark);
+      c.beginPath(); c.arc(fx * r + step, fy * r, r * 0.1, 0, TAU); c.fill();
+    }
+
+    // Iron chassis.
+    c.fillStyle = T(pal.secondary);
+    c.beginPath(); c.ellipse(0, 0, r * 1.02, r * 0.68, 0, 0, TAU); c.fill();
+    c.strokeStyle = T(pal.metal);
+    c.lineWidth = 2.4;
+    c.stroke();
+    c.fillStyle = T(pal.primary);
+    c.globalAlpha = 0.9;
+    c.beginPath(); c.ellipse(0, -r * 0.06, r * 0.78, r * 0.46, 0, 0, TAU); c.fill();
+    c.globalAlpha = 1;
+    c.strokeStyle = rgba(pal.dark, 0.7);
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(-r * 0.6, -r * 0.1); c.lineTo(r * 0.6, -r * 0.16);
+    c.moveTo(-r * 0.48, r * 0.22); c.lineTo(r * 0.48, r * 0.18);
+    c.stroke();
+
+    // Back spines.
+    c.fillStyle = T(pal.metal);
+    for (let i = -1; i <= 1; i++) {
+      c.beginPath();
+      c.moveTo(i * r * 0.3 - r * 0.09, -r * 0.5);
+      c.lineTo(i * r * 0.34, -r * 1.02 - Math.abs(i) * r * 0.08);
+      c.lineTo(i * r * 0.3 + r * 0.09, -r * 0.5);
+      c.closePath();
+      c.fill();
+    }
+
+    // Exhaust vents.
+    c.fillStyle = T(pal.dark);
+    c.fillRect(-r * 0.95, -r * 0.22, r * 0.28, r * 0.12);
+    c.fillRect(-r * 0.95, r * 0.02, r * 0.28, r * 0.12);
+    if (motion) {
+      for (let i = 0; i < 2; i++) {
+        const t = (this.time * 0.9 + i * 0.5) % 1;
+        const px = -r * (1.02 + t * 0.55);
+        const py = -r * 0.16 + i * r * 0.26 - t * r * 0.08;
+        c.fillStyle = rgba(pal.primary, (1 - t) * 0.28);
+        c.beginPath(); c.arc(px, py, r * (0.08 + t * 0.08), 0, TAU); c.fill();
+      }
+    }
+
+    // Rotating siege cannon.
+    c.save();
+    c.translate(0, -r * 0.14);
+    c.rotate(e.faceA);
+    c.fillStyle = T(pal.dark);
+    c.beginPath(); c.arc(0, 0, r * 0.4, 0, TAU); c.fill();
+    c.strokeStyle = T(pal.metal);
+    c.lineWidth = 2;
+    c.stroke();
+    const barrel = r * 1.35;
+    const recoil = charge * r * 0.14;
+    c.fillStyle = T(pal.metal);
+    c.beginPath();
+    c.moveTo(-r * 0.12, -r * 0.16);
+    c.lineTo(barrel - recoil, -r * 0.11);
+    c.lineTo(barrel - recoil, r * 0.11);
+    c.lineTo(-r * 0.12, r * 0.16);
+    c.closePath();
+    c.fill();
+    c.strokeStyle = T(pal.dark);
+    c.lineWidth = 1.8;
+    c.stroke();
+    c.strokeStyle = rgba(pal.secondary, 0.9);
+    c.lineWidth = r * 0.08;
+    c.beginPath();
+    c.moveTo(r * 0.5, -r * 0.13); c.lineTo(r * 0.5, r * 0.13);
+    c.moveTo(r * 0.95, -r * 0.13); c.lineTo(r * 0.95, r * 0.13);
+    c.stroke();
+    this.drawGlow(c, barrel - recoil, 0, r * (0.28 + charge * 0.4), pal.accent, 0.22 + charge * 0.6);
+    c.fillStyle = T(pal.accent);
+    c.globalAlpha = 0.45 + charge * 0.55;
+    c.beginPath(); c.arc(barrel - recoil, 0, r * (0.12 + charge * 0.08), 0, TAU); c.fill();
+    c.globalAlpha = 1;
+    if (charge > 0 && motion) {
+      c.strokeStyle = rgba(pal.accent, 0.3 + charge * 0.4);
+      c.lineWidth = 1.6;
+      for (let i = 0; i < 3; i++) {
+        const a = this.time * 9 + i * (TAU / 3);
+        c.beginPath();
+        c.arc(barrel - recoil, 0, r * (0.22 + charge * 0.16), a, a + 0.7);
+        c.stroke();
+      }
+    }
+    c.restore();
+
+    // Forward sensor eye.
+    this.drawGlow(c, r * 0.58, r * 0.12, r * 0.2, pal.primary, 0.4);
+    c.fillStyle = T(pal.accent);
+    c.beginPath(); c.arc(r * 0.58, r * 0.12, r * 0.06, 0, TAU); c.fill();
+
+    c.restore();
+  }
+
+  /** Blood Healer: corrupted green mystic with a halo, staff, and rising motes. */
+  private drawHealerElite(c: CanvasRenderingContext2D, e: Enemy, pal: ElitePalette) {
+    const r = e.r;
+    const motion = !this.reducedMotion;
+    const bob = motion ? Math.sin(this.time * 2.5 + e.seed) * 3.5 : 0;
+    const sway = motion ? Math.sin(this.time * 1.35 + e.seed) * 0.06 : 0;
+    const charge = clamp(1 - e.roleT / 3, 0, 1);
+    const T = (color: string) => this.eliteTint(e, color);
+
+    c.save();
+    c.translate(0, bob);
+    c.rotate(sway);
+
+    // Halo behind the hood.
+    c.save();
+    c.translate(0, -r * 0.9);
+    c.rotate(motion ? this.time * 0.4 : 0);
+    this.drawGlow(c, 0, 0, r * 0.9, pal.primary, 0.1 + charge * 0.18);
+    c.strokeStyle = rgba(pal.primary, 0.28 + charge * 0.3);
+    c.lineWidth = 1.6;
+    c.beginPath(); c.arc(0, 0, r * 0.76, 0, TAU); c.stroke();
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * TAU;
+      c.fillStyle = rgba(pal.accent, 0.45 + charge * 0.3);
+      c.beginPath(); c.arc(Math.cos(a) * r * 0.76, Math.sin(a) * r * 0.76, r * 0.05, 0, TAU); c.fill();
+    }
+    c.restore();
+
+    // Tattered robe.
+    c.fillStyle = T(pal.dark);
+    c.beginPath();
+    c.moveTo(0, -r * 1.05);
+    c.bezierCurveTo(r * 0.78, -r * 0.95, r * 0.95, -r * 0.18, r * 0.7, r * 0.5);
+    c.lineTo(r * 0.45, r * 1.0);
+    c.lineTo(r * 0.2, r * 0.6);
+    c.lineTo(0, r * 1.06);
+    c.lineTo(-r * 0.2, r * 0.6);
+    c.lineTo(-r * 0.48, r * 0.98);
+    c.lineTo(-r * 0.72, r * 0.48);
+    c.bezierCurveTo(-r * 0.95, -r * 0.2, -r * 0.78, -r * 0.95, 0, -r * 1.05);
+    c.closePath();
+    c.fill();
+    c.fillStyle = T(pal.secondary);
+    c.beginPath();
+    c.moveTo(0, -r * 0.88);
+    c.bezierCurveTo(r * 0.55, -r * 0.78, r * 0.6, -r * 0.1, r * 0.42, r * 0.46);
+    c.lineTo(0, r * 0.8);
+    c.lineTo(-r * 0.42, r * 0.46);
+    c.bezierCurveTo(-r * 0.6, -r * 0.1, -r * 0.55, -r * 0.78, 0, -r * 0.88);
+    c.closePath();
+    c.fill();
+    c.strokeStyle = rgba(pal.primary, 0.35);
+    c.lineWidth = 1.2;
+    c.beginPath();
+    c.moveTo(-r * 0.3, -r * 0.2); c.lineTo(0, r * 0.72); c.lineTo(r * 0.3, -r * 0.2);
+    c.stroke();
+
+    // Hood and void face.
+    c.fillStyle = T(pal.primary);
+    c.beginPath(); c.arc(0, -r * 0.6, r * 0.62, 0, TAU); c.fill();
+    c.fillStyle = T(pal.dark);
+    c.beginPath(); c.arc(0, -r * 0.56, r * 0.44, 0, TAU); c.fill();
+    c.fillStyle = '#06110a';
+    c.beginPath(); c.ellipse(0, -r * 0.54, r * 0.26, r * 0.34, 0, 0, TAU); c.fill();
+    c.fillStyle = T(pal.accent);
+    c.beginPath();
+    c.arc(-r * 0.1, -r * 0.6, 2.2, 0, TAU);
+    c.arc(r * 0.1, -r * 0.6, 2.2, 0, TAU);
+    c.fill();
+
+    // Arms.
+    c.strokeStyle = T(pal.secondary);
+    c.lineWidth = 3.2;
+    c.lineCap = 'round';
+    c.beginPath(); c.moveTo(-r * 0.45, -r * 0.15); c.quadraticCurveTo(-r * 0.82, r * 0.1, -r * 0.7, r * 0.5); c.stroke();
+    c.beginPath(); c.moveTo(r * 0.45, -r * 0.15); c.quadraticCurveTo(r * 0.78, r * 0.08, r * 0.86, r * 0.4); c.stroke();
+
+    // Crooked staff.
+    c.strokeStyle = T(pal.metal);
+    c.lineWidth = 3;
+    c.beginPath();
+    c.moveTo(r * 0.88, r * 0.9);
+    c.quadraticCurveTo(r * 1.12, r * 0.1, r * 0.98, -r * 0.78);
+    c.quadraticCurveTo(r * 0.92, -r * 0.95, r * 1.05, -r * 1.02);
+    c.stroke();
+    const orb = this.reducedMotion ? 0.7 : 0.65 + Math.sin(this.time * 3.2 + e.seed) * 0.2;
+    this.drawGlow(c, r * 1.05, -r * 1.06, r * (0.34 + charge * 0.18), pal.primary, 0.32 + orb * 0.3);
+    c.fillStyle = T(pal.accent);
+    c.beginPath(); c.arc(r * 1.05, -r * 1.06, 3.2 + orb * 1.2, 0, TAU); c.fill();
+    c.fillStyle = rgba(pal.accent, 0.5);
+    c.beginPath(); c.arc(r * 0.86, r * 0.42, r * 0.08, 0, TAU); c.fill();
+
+    // Restorative motes.
+    if (motion) {
+      for (let i = 0; i < 4; i++) {
+        const t = (this.time * 0.42 + i * 0.25) % 1;
+        const mx = Math.sin(this.time * 1.2 + i * 2 + e.seed) * r * 1.05;
+        const my = r * 0.85 - t * r * 2.1;
+        c.fillStyle = rgba(pal.primary, (1 - t) * 0.4);
+        c.beginPath(); c.arc(mx, my, r * 0.045, 0, TAU); c.fill();
+      }
+    } else {
+      c.fillStyle = rgba(pal.primary, 0.3);
+      for (let i = 0; i < 3; i++) {
+        c.beginPath();
+        c.arc((i - 1) * r * 0.45, r * 0.2 - i * r * 0.25, r * 0.045, 0, TAU);
+        c.fill();
+      }
+    }
+
+    c.restore();
+  }
+
+  /** Role-coloured death burst layered over the normal kill effect. */
+  private eliteDeathEffect(e: Enemy) {
+    const pal = e.role ? ELITE_PALETTES[e.role] : null;
+    if (!pal || !e.role) return;
+    const r = e.r;
+    switch (e.role) {
+      case 'shielded':
+        this.burst(e.x, e.y, pal.metal, 12, 260, 'shard');
+        this.burst(e.x, e.y, pal.primary, 10, 220, 'spark');
+        this.part(e.x, e.y, 0, 0, 0.6, r * 2.0, pal.accent, 'ring');
+        break;
+      case 'summoner':
+        this.burst(e.x, e.y, pal.primary, 12, 240, 'shard');
+        this.part(e.x, e.y, 0, 0, 0.55, r * 1.8, pal.accent, 'ring');
+        break;
+      case 'assassin':
+        this.burst(e.x, e.y, pal.dark, 10, 200, 'dot');
+        this.burst(e.x, e.y, pal.primary, 12, 280, 'spark');
+        this.part(e.x, e.y, 0, 0, 0.45, r * 1.7, pal.primary, 'ring');
+        break;
+      case 'artillery':
+        this.burst(e.x, e.y, pal.primary, 16, 320, 'dot');
+        this.burst(e.x, e.y, pal.accent, 10, 260, 'spark');
+        this.part(e.x, e.y, 0, 0, 0.65, r * 2.2, pal.secondary, 'ring');
+        break;
+      case 'healer':
+        this.burst(e.x, e.y, pal.primary, 14, 220, 'dot');
+        this.burst(e.x, e.y, pal.accent, 8, 180, 'spark');
+        this.part(e.x, e.y, 0, 0, 0.6, r * 1.9, pal.accent, 'ring');
+        break;
     }
   }
 

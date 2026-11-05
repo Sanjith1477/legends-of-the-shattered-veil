@@ -308,6 +308,80 @@ export const ELITE_NAMES: string[] = [
   'Fenris Spawn',
 ];
 
+/* --------------------------- elite enemy roles --------------------------- */
+
+export type EliteRole = 'shielded' | 'summoner' | 'assassin' | 'artillery' | 'healer';
+
+export interface EliteRoleDef {
+  id: EliteRole;
+  title: string;
+  cue: string;
+  color: string;
+  unlockWave: number;
+}
+
+export const ELITE_ROLES: Record<EliteRole, EliteRoleDef> = {
+  shielded: {
+    id: 'shielded',
+    title: 'Shieldbearer',
+    cue: 'Frontal blows are turned aside — flank it or use radial arts.',
+    color: '#8fd7ff',
+    unlockWave: 3,
+  },
+  assassin: {
+    id: 'assassin',
+    title: 'Veil Assassin',
+    cue: 'Marks a blink point before striking — move when the mark appears.',
+    color: '#b9a7ff',
+    unlockWave: 5,
+  },
+  artillery: {
+    id: 'artillery',
+    title: 'Siege Artillerist',
+    cue: 'Keeps its distance and lobs slow shells — close in or sidestep.',
+    color: '#ffb36b',
+    unlockWave: 8,
+  },
+  summoner: {
+    id: 'summoner',
+    title: 'Grave Summoner',
+    cue: 'Channels reinforcements — freeze it or burst it down.',
+    color: '#c58cf0',
+    unlockWave: 11,
+  },
+  healer: {
+    id: 'healer',
+    title: 'Blood Healer',
+    cue: 'Mends nearby foes — kill it first or freeze it.',
+    color: '#7ddb6f',
+    unlockWave: 14,
+  },
+};
+
+/** Base enemy kinds that can carry each elite role. */
+export const ELITE_ROLE_KINDS: Record<EliteRole, EnemyKind[]> = {
+  shielded: ['husk', 'brute', 'demon', 'golem'],
+  assassin: ['skitter', 'wraith'],
+  artillery: ['hexer', 'mage', 'dragon'],
+  summoner: ['hexer', 'mage'],
+  healer: ['husk', 'hexer', 'mage'],
+};
+
+/** Maximum simultaneously active elites of each role (fairness cap). */
+export const ELITE_ROLE_CAPS: Record<EliteRole, number> = {
+  shielded: 2,
+  assassin: 2,
+  artillery: 2,
+  summoner: 1,
+  healer: 1,
+};
+
+export function eliteRolesFor(kind: EnemyKind, wave: number): EliteRole[] {
+  return (Object.keys(ELITE_ROLES) as EliteRole[]).filter(
+    (role) => wave >= ELITE_ROLES[role].unlockWave && ELITE_ROLE_KINDS[role].includes(kind),
+  );
+}
+
 export const HERO_NAMES: Record<string, string[]> = {
   kensei: ['Akio', 'Yuki', 'Ren', 'Hana', 'Jiro', 'Kaede', 'Sora'],
   shieldthane: ['Bjorn', 'Hilda', 'Ragnar', 'Astrid', 'Ulf', 'Sigrid', 'Sten'],

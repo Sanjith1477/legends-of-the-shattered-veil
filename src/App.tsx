@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Game, type GameStats, type GameState, type HudBus, type LevelUpData, type ShopData } from './game/engine';
-import type { PowerId, ShopItemId } from './game/data';
+import type { EliteRole, PowerId, ShopItemId } from './game/data';
 import { discoverPower, discoverShopItem, loadDiscovery, type DiscoveryState } from './game/collection';
 import {
   createProfile,
@@ -55,6 +55,22 @@ import { AccountPanel } from './components/AccountPanel';
 import { exitAndroidNativeApp, isAndroidNativeApp } from './platform/androidApp';
 
 const TUTORIAL_VERSION = 2;
+
+type DevTestPanelComponent = (typeof import('./components/DevTestPanel'))['DevTestPanel'];
+type DevAwareStats = GameStats & { testRun?: boolean };
+type DevCapableGame = Game & {
+  startDevRun?: (
+    classId: string,
+    name: string,
+    profileId: string,
+    profileName: string,
+    wave: number,
+    eliteRole: EliteRole | null,
+  ) => boolean;
+  spawnDevElite?: (role: EliteRole) => boolean;
+  isDevTestRun?: () => boolean;
+};
+
 type TutorialEvent = { id: number; type: 'level-up-opened' | 'skill-selected' | 'market-opened' | 'market-purchased' | 'market-continued' };
 type PendingSave = { save: () => Promise<string | null>; promise: Promise<string | null> };
 
@@ -123,6 +139,7 @@ export default function App() {
   const [isTouch] = useState(
     () => typeof window !== 'undefined' && (window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window)
   );
+  const [DevTestPanel, setDevTestPanel] = useState<DevTestPanelComponent | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -139,7 +156,7 @@ export default function App() {
         }
         if (st) {
           setStats(st);
-          if (s === 'over') {
+          if (s === 'over' && !(import.meta.env.DEV && (st as DevAwareStats).testRun)) {
             const progressed = updateProfileProgress(st.profileId, st.wave, st.classId);
             if (progressed) {
               setActiveProfileState(progressed);
@@ -155,11 +172,29 @@ export default function App() {
       },
     });
     gameRef.current = game;
-    (window as unknown as Record<string, unknown>).__game = game; // TEMP: bot playtest hook, remove before ship
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__game = game; // Bot playtest hook (dev builds only).
+    }
     return () => {
+      if (import.meta.env.DEV) delete (window as unknown as Record<string, unknown>).__game;
       game.destroy();
       gameRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      let cancelled = false;
+      void (async () => {
+        // Load the dev runtime first so the panel's handlers always exist.
+        await import('./game/dev-run');
+        const { DevTestPanel: Panel } = await import('./components/DevTestPanel');
+        if (!cancelled) setDevTestPanel(() => Panel);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
   }, []);
 
   useEffect(() => {
@@ -545,6 +580,30 @@ export default function App() {
     g.start(classId, activeProfile.name, activeProfile.id, activeProfile.name);
   };
 
+  const startDevGame = (wave: number, eliteRole: EliteRole | null) => {
+    if (!import.meta.env.DEV) return;
+    const g = gameRef.current as DevCapableGame | null;
+    if (!g || !activeProfile) return;
+    g.sfx.ensure();
+    g.sfx.play('click');
+    inscribedKeyRef.current = null;
+    setSaveState('idle');
+    setSaveError('');
+    g.startDevRun?.(
+      activeProfile.preferredClass,
+      activeProfile.name,
+      activeProfile.id,
+      activeProfile.name,
+      wave,
+      eliteRole,
+    );
+  };
+
+  const spawnDevElite = (role: EliteRole) => {
+    if (!import.meta.env.DEV) return;
+    (gameRef.current as DevCapableGame | null)?.spawnDevElite?.(role);
+  };
+
   const openTutorial = () => {
     setSettingsOpen(false);
     setTutorialEvent(null);
@@ -591,10 +650,14 @@ export default function App() {
     const g = gameRef.current;
     if (!g) return;
     g.sfx.play('click');
+    const live = g.getStats() as DevAwareStats;
+    if (import.meta.env.DEV && live.testRun) {
+      g.toMenu();
+      return;
+    }
     // Abandoning still banks progress: best wave, unlocks, discovery and a
     // ledger entry for the partial run — nothing earned is lost.
     try {
-      const live = g.getStats();
       // Skip if this exact run was already inscribed (e.g. TITLE pressed
       // from the game-over screen) so runs/ledger aren't double-counted.
       const key = activeProfile
@@ -634,7 +697,7 @@ export default function App() {
     if (chosen && tutorialOpenRef.current) {
       setTutorialEvent({ id: ++tutorialEventId.current, type: 'skill-selected' });
     }
-    if (chosen && activeProfile) {
+    if (chosen && activeProfile && !(import.meta.env.DEV && (gameRef.current as DevCapableGame | null)?.isDevTestRun?.())) {
       setDiscovery(discoverPower(activeProfile.id, id));
       if (cloud) void markCloudDiscovery('power', id);
     }
@@ -645,7 +708,7 @@ export default function App() {
     if (bought && tutorialOpenRef.current) {
       setTutorialEvent({ id: ++tutorialEventId.current, type: 'market-purchased' });
     }
-    if (bought && activeProfile) {
+    if (bought && activeProfile && !(import.meta.env.DEV && (gameRef.current as DevCapableGame | null)?.isDevTestRun?.())) {
       setDiscovery(discoverShopItem(activeProfile.id, id));
       if (cloud) void markCloudDiscovery('shop', id);
     }
@@ -720,6 +783,7 @@ export default function App() {
 
   const inscribeRun = async (): Promise<string | null> => {
     if (!stats || !activeProfile) return 'No adventurer is signed in.';
+    if (import.meta.env.DEV && (stats as DevAwareStats).testRun) return null;
     if (cloud) {
       const result = await recordRun({
         classId: stats.classId,
@@ -769,7 +833,7 @@ export default function App() {
   // click required. A ref-guarded key prevents double-saving the same run
   // (e.g. on React StrictMode re-renders or re-opening the same stats).
   useEffect(() => {
-    if (screen !== 'over' || !stats || !activeProfile) return;
+    if (screen !== 'over' || !stats || !activeProfile || (import.meta.env.DEV && (stats as DevAwareStats).testRun)) return;
     const key = `${activeProfile.id}|${stats.classId}|${stats.score}|${stats.wave}|${stats.timeSec}`;
     if (inscribedKeyRef.current === key) return;
     inscribedKeyRef.current = key;
@@ -789,7 +853,7 @@ export default function App() {
   }, [screen, stats, activeProfile]);
 
   const retrySave = () => {
-    if (!stats || !activeProfile) return;
+    if (!stats || !activeProfile || (import.meta.env.DEV && (stats as DevAwareStats).testRun)) return;
     inscribedKeyRef.current = `${activeProfile.id}|${stats.classId}|${stats.score}|${stats.wave}|${stats.timeSec}`;
     setSaveState('saving');
     setSaveError('');
@@ -806,6 +870,10 @@ export default function App() {
 
   const pauseStats = screen === 'paused' ? (gameRef.current?.getStats() ?? null) : null;
   const pauseData = screen === 'paused' ? (gameRef.current?.getPauseData() ?? null) : null;
+  const devTestActive = import.meta.env.DEV
+    ? ((gameRef.current as DevCapableGame | null)?.isDevTestRun?.() ?? false)
+    : false;
+  const devCurrentWave = import.meta.env.DEV ? (gameRef.current?.getStats().wave ?? null) : null;
 
   return (
     <div className="fixed inset-0 bg-ink overflow-hidden">
@@ -979,6 +1047,17 @@ export default function App() {
           onRestart={restart}
           onMenu={toMenu}
           onRetry={retrySave}
+        />
+      )}
+
+      {import.meta.env.DEV && DevTestPanel && (
+        <DevTestPanel
+          hasProfile={Boolean(activeProfile)}
+          inRun={screen === 'playing'}
+          isTestRun={devTestActive}
+          currentWave={devCurrentWave}
+          onStart={startDevGame}
+          onSpawnElite={spawnDevElite}
         />
       )}
     </div>

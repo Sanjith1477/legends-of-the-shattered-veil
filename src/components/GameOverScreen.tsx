@@ -5,6 +5,7 @@ import { Leaderboard } from './Leaderboard';
 import { FantasyBackdrop } from './FantasyBackdrop';
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
+type DevAwareStats = GameStats & { testRun?: boolean };
 
 interface Props {
   stats: GameStats;
@@ -29,7 +30,9 @@ function StatCell({ label, value, accent }: { label: string; value: string; acce
 }
 
 export function GameOverScreen({ stats, scores, profile, saveState, saveError, onRestart, onMenu, onRetry }: Props) {
-  const isRecord = stats.score > 0 && (scores.length === 0 || stats.score >= scores[0].score);
+  // Developer test state is injected at runtime by the DEV-only engine wrapper.
+  const devTestRun = import.meta.env.DEV && Boolean((stats as DevAwareStats).testRun);
+  const isRecord = !devTestRun && stats.score > 0 && (scores.length === 0 || stats.score >= scores[0].score);
   const cls = CLASSES.find((c) => c.id === stats.classId);
   const m = Math.floor(stats.timeSec / 60);
   const s = stats.timeSec % 60;
@@ -55,6 +58,11 @@ export function GameOverScreen({ stats, scores, profile, saveState, saveError, o
                 ★ NEW LEGEND — TOP SCORE ★
               </div>
             )}
+            {devTestRun && (
+              <div className="inline-block mt-2 font-display font-bold text-[10px] tracking-[0.24em] text-[#ffb0a2] bg-[#43151b] border border-[#ff8a8a]/60 px-3 py-1 clip-notch-sm">
+                DEVELOPER TEST RUN · NOT RECORDED
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-3 gap-2 mt-4">
@@ -72,11 +80,17 @@ export function GameOverScreen({ stats, scores, profile, saveState, saveError, o
               <div>
                 <div className="font-display text-[10px] tracking-[0.3em] text-gold">REALM LEDGER</div>
                 <div className="text-[11px] text-faint mt-0.5">
-                  Hero <span className="text-parch font-bold">{stats.playerName}</span> is recorded under{' '}
-                  <span className="text-goldbright font-bold">{profile?.name ?? stats.profileName}</span>.
+                  {devTestRun ? (
+                    <>Developer test run — no score, unlocks, or rewards were written to the ledger.</>
+                  ) : (
+                    <>
+                      Hero <span className="text-parch font-bold">{stats.playerName}</span> is recorded under{' '}
+                      <span className="text-goldbright font-bold">{profile?.name ?? stats.profileName}</span>.
+                    </>
+                  )}
                 </div>
               </div>
-              {saveState === 'error' ? (
+              {!devTestRun && (saveState === 'error' ? (
                 <button onClick={onRetry} className="btn-gold clip-notch-sm px-4 py-2 text-xs font-black shrink-0 bg-blood/80">
                   RETRY SAVE
                 </button>
@@ -93,9 +107,9 @@ export function GameOverScreen({ stats, scores, profile, saveState, saveError, o
                   />
                   {saveState === 'saved' ? 'INSCRIBED ✓' : 'SAVING…'}
                 </span>
-              )}
+              ))}
             </div>
-            {saveState === 'error' && (
+            {saveState === 'error' && !devTestRun && (
               <p className="text-[11px] text-blood mb-2">
                 {saveError || 'Could not save this run.'} Your local progress is safe — press RETRY SAVE to try again.
               </p>
