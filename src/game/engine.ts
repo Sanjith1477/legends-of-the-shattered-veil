@@ -39,6 +39,21 @@ import { heroBasePower, waveDifficulty, type HeroCombatStats, type WaveDifficult
 import { analyzeMovement, BOSS_AIM_TUNING, predictedAim, turnToward, type MovementSample } from './boss-ai';
 import { ASSASSIN_TELEPORT, sampleAssassinLanding } from './elite-teleport';
 import { ELITE_PALETTES, type ElitePalette } from './elite-visuals';
+import {
+  LEGEND_MECHANICS,
+  applyBurnStatus,
+  bloodRiteDamage,
+  bloodRiteProjectileCount,
+  claimProjectileHit,
+  criticalDamage,
+  pointSegmentDistanceSquared,
+  radialAngles,
+  resolveCriticalHit,
+  shieldBlocksHit,
+  stasisDuration,
+  tickBurnStatus,
+  type BurnStatus,
+} from './legend-mechanics';
 
 export type GameState = 'menu' | 'playing' | 'paused' | 'levelup' | 'shop' | 'dying' | 'over';
 
@@ -163,6 +178,8 @@ interface Player {
   legacyCd: number; focusT: number; sureCrits: number; wardT: number; wardTick: number;
   riteT: number; tideT: number; stasisT: number;
   tempestT: number; tempestTick: number; pyreT: number; pyreTick: number;
+  pyreApparitionT: number; glacierSpikeCd: number; runicThornsCd: number; solarBarrageT: number;
+  pearlSurgeHeal: number;
   slowT: number;
   ownedPowerIds: PowerId[];
   // Archetype & Evolution state
@@ -204,7 +221,7 @@ interface Player {
   dead: boolean;
 }
 
-interface Decoy { x: number; y: number; t: number; dur: number }
+interface Decoy { x: number; y: number; t: number; dur: number; vortexT: number }
 
 interface Enemy {
   kind: EnemyKind; x: number; y: number; vx: number; vy: number; r: number;
@@ -220,13 +237,14 @@ interface Enemy {
   shieldFlash: number;
   blinkX: number;
   blinkY: number;
+  burning: BurnStatus | null;
   dead: boolean;
 }
 
 interface Shot {
   x: number; y: number; vx: number; vy: number; r: number;
   dmg: number; life: number; color: string; from: 'p' | 'e'; pierce: number;
-  kind?: 'normal' | 'crescent' | 'chakram' | 'trident' | 'solar' | 'firewave' | 'echo';
+  kind?: 'normal' | 'crescent' | 'chakram' | 'trident' | 'solar' | 'firewave' | 'echo' | 'dragon';
   returning?: boolean;
   maxLife?: number;
   startX?: number;
@@ -234,6 +252,44 @@ interface Shot {
   bounces?: number;
   splitOnExpire?: boolean;
   pullsEnemies?: boolean;
+  homing?: boolean;
+  burning?: boolean;
+  glassTrail?: boolean;
+  trailT?: number;
+  glacierSpikes?: boolean;
+  tidalWave?: boolean;
+  healOnHit?: number;
+  triggerHitEffects?: boolean;
+  applyModifiers?: boolean;
+  hitEnemies?: Set<Enemy>;
+  returningNow?: boolean;
+}
+
+interface DamageOptions {
+  pierceShield?: boolean;
+  triggerHitEffects?: boolean;
+  applyModifiers?: boolean;
+  feedback?: boolean;
+}
+
+interface GlassTrail {
+  x: number;
+  y: number;
+  remaining: number;
+  tick: number;
+  damage: number;
+}
+
+interface VoidWell {
+  x: number;
+  y: number;
+  remaining: number;
+  tick: number;
+}
+
+interface DelayedEffect {
+  remaining: number;
+  run: () => void;
 }
 
 interface Pickup {
@@ -355,7 +411,7 @@ export class Game {
   muted = false;
   private legacy: LegacyDef = legacyFor('kensei');
   private decoy: Decoy | null = null;
-  private stasisHits: { e: Enemy; dmg: number }[] = [];
+  private stasisHits = new Set<Enemy>();
 
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -386,6 +442,9 @@ export class Game {
   private enemies: Enemy[] = [];
   private bossVisualPhases = new WeakMap<Enemy, number>();
   private shots: Shot[] = [];
+  private delayedEffects: DelayedEffect[] = [];
+  private glassTrails: GlassTrail[] = [];
+  private voidWells: VoidWell[] = [];
   private pickups: Pickup[] = [];
   private parts: Particle[] = [];
   private floaters: Floater[] = [];
@@ -471,6 +530,7 @@ export class Game {
 
   destroy() {
     this.running = false;
+    this.delayedEffects = [];
     this.music.destroy();
     cancelAnimationFrame(this.raf);
     this.ro?.disconnect();
@@ -605,6 +665,8 @@ export class Game {
       legacyCd: 0, focusT: 0, sureCrits: 0, wardT: 0, wardTick: 0,
       riteT: 0, tideT: 0, stasisT: 0,
       tempestT: 0, tempestTick: 0, pyreT: 0, pyreTick: 0,
+      pyreApparitionT: 0, glacierSpikeCd: 0, runicThornsCd: 0, solarBarrageT: 0,
+      pearlSurgeHeal: 0,
       slowT: 0,
       ownedPowerIds: [],
       rangeTier: 0,
@@ -650,12 +712,15 @@ export class Game {
     this.seenEliteRoles.clear();
     this.legacy = legacyFor(cls.id);
     this.decoy = null;
-    this.stasisHits = [];
+    this.stasisHits = new Set();
     this.legacyQueued = false;
     this.music.ensure();
     this.music.setScene('zone', 0, false);
     this.enemies = [];
     this.shots = [];
+    this.delayedEffects = [];
+    this.glassTrails = [];
+    this.voidWells = [];
     this.pickups = [];
     this.parts = [];
     this.floaters = [];
@@ -712,6 +777,11 @@ export class Game {
     this.music.setScene('menu');
     this.enemies = [];
     this.shots = [];
+    this.delayedEffects = [];
+    this.glassTrails = [];
+    this.voidWells = [];
+    this.decoy = null;
+    this.stasisHits.clear();
     this.pickups = [];
     this.floaters = [];
     this.slashes = [];
@@ -1496,6 +1566,7 @@ export class Game {
   }
 
   private openShop() {
+    this.delayedEffects = [];
     // Locked items are carried over across waves until bought or explicitly unlocked.
     const rations = SHOP_ITEMS.find((item) => item.id === 'rations')!;
     const carried: ShopItemDef[] = [];
@@ -1600,6 +1671,13 @@ export class Game {
     return Math.min(0.85, this.classDef.crit + p.critBonus);
   }
 
+  private rollCrit() {
+    const p = this.p!;
+    const guaranteed = p.sureCrits > 0;
+    if (guaranteed) p.sureCrits--;
+    return resolveCriticalHit(Math.random(), this.critChance(), guaranteed);
+  }
+
   private currentHeroPower() {
     const p = this.p!;
     const stats: HeroCombatStats = {
@@ -1696,6 +1774,7 @@ export class Game {
       minionT: 6, faceA: 0, telegraphed: false, launched: false, bossAttackWindup: false,
       variant: zoneIdx, dashT: 0,
       role, roleT: roleInit, shieldFlash: 0, blinkX: 0, blinkY: 0,
+      burning: null,
       dead: false,
     };
     if (kind === 'boss') {
@@ -1760,6 +1839,7 @@ export class Game {
       minionT: 99, faceA: 0, telegraphed: false, launched: false, bossAttackWindup: false,
       variant: 0, dashT: 0,
       role: null, roleT: 0, shieldFlash: 0, blinkX: 0, blinkY: 0,
+      burning: null,
       dead: false,
     };
     this.enemies.push(e);
@@ -1926,6 +2006,7 @@ export class Game {
         pierce: 99,
         kind: 'normal',
         returning,
+        glacierSpikes: p.hasEvoGlacierMaster,
         maxLife: 0.9 + p.rangeTier * 0.1,
         startX: p.x,
         startY: p.y,
@@ -1935,7 +2016,8 @@ export class Game {
 
     // Jaguar: Solar spears
     if (cls.id === 'jaguar' && (p.rangeTier >= 3 || p.hasEvoJaguarSpears || p.hasEvoFifthSunBorn)) {
-      const count = p.hasEvoFifthSunBorn ? 4 : (p.rangeTier >= 4 ? 3 : 1);
+      const baseCount = p.hasEvoFifthSunBorn ? 4 : (p.rangeTier >= 4 ? 3 : 1);
+      const count = bloodRiteProjectileCount(baseCount, p.hasEvoPyramidRite && p.riteT > 0);
       for (let i = 0; i < count; i++) {
         const spread = count === 1 ? 0 : (i - (count - 1) / 2) * 0.2;
         const a = p.aim + spread;
@@ -1979,6 +2061,9 @@ export class Game {
           startX: p.x,
           startY: p.y,
           splitOnExpire: splitOnExp,
+          homing: p.hasEvoSandDuneLord,
+          burning: p.hasEvoSandDuneLord,
+          glassTrail: p.hasEvoSandDuneLord,
         });
       }
       this.sfx.play('mirage');
@@ -1996,7 +2081,7 @@ export class Game {
           y: p.y + Math.sin(a) * 26,
           vx: Math.cos(a) * 460,
           vy: Math.sin(a) * 460,
-          r: 12 + p.rangeTier * 1.5,
+          r: p.hasEvoTideOceanMonarch ? 18 + p.rangeTier * 1.5 : 12 + p.rangeTier * 1.5,
           dmg: dmgBase * 1.15,
           life: 1.2 + p.rangeTier * 0.12,
           color: '#55d9e8',
@@ -2008,6 +2093,7 @@ export class Game {
           startX: p.x,
           startY: p.y,
           pullsEnemies: true,
+          tidalWave: p.hasEvoTideOceanMonarch,
         });
       }
     }
@@ -2020,23 +2106,45 @@ export class Game {
         const rx = p.x + Math.cos(a) * (cls.range + p.rangeBonus) * 0.5;
         const ry = p.y + Math.sin(a) * (cls.range + p.rangeBonus) * 0.5;
         this.part(rx, ry, 0, 0, 0.4, 28, '#b68cff', 'ring');
-        setTimeout(() => {
-          if (!this.p || this.p.dead) return;
+        this.scheduleDelayedEffect(0.22, () => {
+          if (this.p !== p || p.dead) return;
           this.part(rx, ry, 0, 0, 0.45, 40, '#e8d8ff', 'ring');
           this.burst(rx, ry, '#b68cff', 10, 200, 'shard');
           for (const e of this.enemies) {
             if (e.dead || e.spawn > 0) continue;
             if (Math.hypot(e.x - rx, e.y - ry) < 65 + e.r) {
               const echoDmg = dmgBase * 0.7 * (p.hasEvoRiftStasisDoubler && p.stasisT > 0 ? 2.5 : 1);
-              this.damageEnemy(e, echoDmg, Math.cos(a), Math.sin(a), Math.random() < this.critChance(), 180, true);
+              this.damageEnemy(e, echoDmg, Math.cos(a), Math.sin(a), this.rollCrit(), 180, true);
             }
           }
-        }, 220);
+        });
       }
       if (p.rangeTier >= 3) {
         // Blink strike: nudge player slightly forward through targets
         p.x = clamp(p.x + Math.cos(p.aim) * 35, 30, ARENA_W - 30);
         p.y = clamp(p.y + Math.sin(p.aim) * 35, 30, ARENA_H - 30);
+      }
+      if (p.hasEvoRiftUnwrittenVoid) {
+        const length = Math.hypot(this.viewW, this.viewH) / this.zoom;
+        const endX = p.x + Math.cos(p.aim) * length;
+        const endY = p.y + Math.sin(p.aim) * length;
+        for (let i = 1; i <= 12; i++) {
+          const progress = i / 12;
+          this.part(
+            p.x + (endX - p.x) * progress,
+            p.y + (endY - p.y) * progress,
+            rand(-18, 18), rand(-18, 18), 0.28, 12, '#b68cff', 'shard',
+          );
+        }
+        for (const e of this.enemies) {
+          if (e.dead || e.spawn > 0) continue;
+          const hitRadius = 28 + e.r;
+          if (pointSegmentDistanceSquared(e.x, e.y, p.x, p.y, endX, endY) > hitRadius * hitRadius) continue;
+          const dx = e.x - p.x;
+          const dy = e.y - p.y;
+          const d = Math.hypot(dx, dy) || 1;
+          this.damageEnemy(e, dmgBase * 0.55, dx / d, dy / d, this.rollCrit(), 100, true);
+        }
       }
     }
 
@@ -2049,15 +2157,73 @@ export class Game {
         .slice(0, count);
       let lx = p.x;
       let ly = p.y;
+      const shockwaveHits = new Set<Enemy>(targets);
       targets.forEach((e) => {
         const dx = e.x - lx;
         const dy = e.y - ly;
         const d = Math.hypot(dx, dy) || 1;
+        if (p.hasEvoStormFirstStormLord) {
+          for (let segment = 0; segment <= 4; segment++) {
+            const progress = segment / 4;
+            this.part(
+              lx + dx * progress + rand(-10, 10),
+              ly + dy * progress + rand(-10, 10),
+              0, 0, 0.2, 3, '#bff6ff', 'spark',
+            );
+          }
+        }
         this.burst(e.x, e.y, '#6ef3ff', 6, 200, 'spark');
-        this.damageEnemy(e, dmgBase * 0.65, dx / d, dy / d, Math.random() < this.critChance(), 150, true);
+        this.damageEnemy(e, dmgBase * 0.65, dx / d, dy / d, this.rollCrit(), 150, true);
+        if (p.hasEvoStormFirstStormLord) {
+          this.part(e.x, e.y, 0, 0, 0.35, 54, '#6ef3ff', 'ring');
+          for (const other of this.enemies) {
+            if (shockwaveHits.has(other) || other.dead || other.spawn > 0) continue;
+            if (Math.hypot(other.x - e.x, other.y - e.y) > 76 + other.r) continue;
+            shockwaveHits.add(other);
+            other.slow = Math.max(other.slow, other.kind === 'boss' ? 0.35 : 0.65);
+            const ox = other.x - e.x;
+            const oy = other.y - e.y;
+            const od = Math.hypot(ox, oy) || 1;
+            this.damageEnemy(other, dmgBase * 0.18, ox / od, oy / od, false, 40, {
+              pierceShield: true,
+              triggerHitEffects: false,
+            });
+          }
+        }
         lx = e.x;
         ly = e.y;
       });
+      if (p.hasEvoStormFirstStormLord) {
+        const directTargets = new Set(targets);
+        let forks = 0;
+        for (const source of targets) {
+          if (forks >= 2) break;
+          const forkTarget = this.enemies
+            .filter((candidate) =>
+              !directTargets.has(candidate) && !shockwaveHits.has(candidate) &&
+              !candidate.dead && candidate.spawn <= 0 &&
+              Math.hypot(candidate.x - source.x, candidate.y - source.y) < Math.hypot(this.viewW, this.viewH) / this.zoom)
+            .sort((a, b) => Math.hypot(a.x - source.x, a.y - source.y) - Math.hypot(b.x - source.x, b.y - source.y))[0];
+          if (!forkTarget) continue;
+          shockwaveHits.add(forkTarget);
+          const fx = forkTarget.x - source.x;
+          const fy = forkTarget.y - source.y;
+          const fd = Math.hypot(fx, fy) || 1;
+          for (let segment = 0; segment <= 4; segment++) {
+            const progress = segment / 4;
+            this.part(
+              source.x + fx * progress + rand(-8, 8),
+              source.y + fy * progress + rand(-8, 8),
+              0, 0, 0.2, 2.5, '#fff6a8', 'spark',
+            );
+          }
+          this.damageEnemy(forkTarget, dmgBase * 0.25, fx / fd, fy / fd, false, 80, {
+            pierceShield: true,
+            triggerHitEffects: false,
+          });
+          forks++;
+        }
+      }
       if (targets.length) this.sfx.play('tempest');
     }
 
@@ -2079,6 +2245,7 @@ export class Game {
           from: 'p',
           pierce: 99,
           kind: 'firewave',
+          burning: true,
         });
       }
       this.sfx.play('pyre');
@@ -2086,8 +2253,8 @@ export class Game {
 
     // Echo Slash mechanical power
     if (p.hasEchoSlash) {
-      setTimeout(() => {
-        if (!this.p || this.p.dead) return;
+      this.scheduleDelayedEffect(0.22, () => {
+        if (this.p !== p || p.dead) return;
         this.slashes.push({
           x: p.x, y: p.y,
           a0: p.aim - cls.arc * 0.5, a1: p.aim + cls.arc * 0.5,
@@ -2100,8 +2267,52 @@ export class Game {
             this.damageEnemy(e, dmgBase * 0.5, (e.x - p.x) / d, (e.y - p.y) / d, false, 150);
           }
         }
-      }, 220);
+      });
     }
+  }
+
+  private fireSolarBarrage(x: number, y: number, aim: number, damage: number, count: number) {
+    for (let i = 0; i < count; i++) {
+      const angle = aim + (i - (count - 1) / 2) * 0.24;
+      this.shots.push({
+        x: x + Math.cos(angle) * 24,
+        y: y + Math.sin(angle) * 24,
+        vx: Math.cos(angle) * 420,
+        vy: Math.sin(angle) * 420,
+        r: 8,
+        dmg: damage,
+        life: 1.2,
+        color: '#ffd24a',
+        from: 'p',
+        pierce: 2,
+        kind: 'solar',
+      });
+    }
+    this.burst(x, y, '#ffd24a', count * 2, 180, 'spark');
+  }
+
+  private fireDragonApparition() {
+    const p = this.p;
+    if (!p) return;
+    const target = this.nearestEnemy(p.x, p.y);
+    if (!target) return;
+    const angle = Math.atan2(target.y - p.y, target.x - p.x);
+    this.shots.push({
+      x: p.x + Math.cos(angle) * 32,
+      y: p.y + Math.sin(angle) * 32,
+      vx: Math.cos(angle) * 340,
+      vy: Math.sin(angle) * 340,
+      r: 15,
+      dmg: this.classDef.dmg * p.dmgMul * 0.75,
+      life: 1.6,
+      color: '#ff8b45',
+      from: 'p',
+      pierce: 1,
+      kind: 'dragon',
+      homing: true,
+      burning: true,
+    });
+    this.burst(p.x, p.y, '#ffc46b', 6, 160, 'spark');
   }
 
   private applySwing() {
@@ -2115,13 +2326,8 @@ export class Game {
       const d = Math.hypot(dx, dy);
       if (d > cls.range + p.rangeBonus + e.r) continue;
       if (angDiff(Math.atan2(dy, dx), p.swingAim) > cls.arc / 2 + 0.18) continue;
-      let crit = Math.random() < this.critChance();
-      if (p.sureCrits > 0) {
-        crit = true;
-        p.sureCrits--;
-      }
-      let dmg = cls.dmg * p.dmgMul * (p.buffT > 0 ? 1.5 : 1) * (p.riteT > 0 ? 1.45 : 1) * rand(0.92, 1.08);
-      if (crit) dmg *= 2;
+      const crit = this.rollCrit();
+      const dmg = cls.dmg * p.dmgMul * (p.buffT > 0 ? 1.5 : 1) * rand(0.92, 1.08);
       const heavy = e.kind === 'brute' || e.kind === 'boss' || e.kind === 'golem' || e.kind === 'demon' || e.kind === 'dragon' ? 0.3 : 1;
       this.damageEnemy(e, dmg, dx / (d || 1), dy / (d || 1), crit, (crit ? 420 : 240) * heavy);
       hitAny = true;
@@ -2129,13 +2335,26 @@ export class Game {
     if (hitAny) this.hitstop = Math.max(this.hitstop, 0.025);
   }
 
-  private damageEnemy(e: Enemy, dmg: number, nx: number, ny: number, crit: boolean, knock: number, pierceShield = false) {
-    if (e.dead || e.spawn > 0) return;
+  private damageEnemy(
+    e: Enemy,
+    dmg: number,
+    nx: number,
+    ny: number,
+    crit: boolean,
+    knock: number,
+    options: DamageOptions | boolean = {},
+  ): number {
+    if (e.dead || e.spawn > 0) return 0;
+    const flags = typeof options === 'boolean' ? { pierceShield: options } : options;
+    if (flags.applyModifiers !== false) {
+      dmg = bloodRiteDamage(dmg, this.classDef.id, (this.p?.riteT ?? 0) > 0);
+    }
+    dmg = criticalDamage(dmg, crit);
+    const triggerHitEffects = flags.triggerHitEffects !== false;
+    const feedback = flags.feedback ?? (flags.triggerHitEffects !== false);
+    const pierceShield = flags.pierceShield ?? false;
     if (e.role === 'shielded' && !pierceShield) {
-      const len = Math.hypot(nx, ny) || 1;
-      // nx/ny points from the attacker toward the enemy, so the attacker sits opposite it.
-      const frontal = (-nx / len) * Math.cos(e.faceA) + (-ny / len) * Math.sin(e.faceA);
-      if (frontal > 0.25) {
+      if (shieldBlocksHit(nx, ny, e.faceA)) {
         const firstBlock = e.shieldFlash <= 0.25;
         dmg *= 0.2;
         e.shieldFlash = 1;
@@ -2143,18 +2362,20 @@ export class Game {
         if (firstBlock) this.floater(e.x, e.y - e.r - 6, 'BLOCKED', 12, '#bfe6ff');
       }
     }
-    if (this.p && this.p.stasisT > 0) this.stasisHits.push({ e, dmg });
+    if (this.p && this.p.stasisT > 0) this.stasisHits.add(e);
     e.hp -= dmg;
     e.flash = 1;
     e.vx += nx * knock;
     e.vy += ny * knock;
-    const def = ENEMIES[e.kind];
-    const hitCol = e.role ? ELITE_PALETTES[e.role].primary : def.color;
-    this.burst(e.x, e.y, hitCol, crit ? 14 : 7, crit ? 300 : 200, crit ? 'spark' : 'dot');
-    this.floater(e.x, e.y - e.r - 6, `${Math.round(dmg)}`, crit ? 22 : 14, crit ? '#ffd97a' : '#f5efdd', crit);
+    if (feedback) {
+      const def = ENEMIES[e.kind];
+      const hitCol = e.role ? ELITE_PALETTES[e.role].primary : def.color;
+      this.burst(e.x, e.y, hitCol, crit ? 14 : 7, crit ? 300 : 200, crit ? 'spark' : 'dot');
+      this.floater(e.x, e.y - e.r - 6, `${Math.round(dmg)}`, crit ? 22 : 14, crit ? '#ffd97a' : '#f5efdd', crit);
+    }
     // Mechanical powers on hit
     const p = this.p;
-    if (p) {
+    if (p && triggerHitEffects) {
       // Impact Shockwave
       if (p.hasImpactShockwave) {
         this.part(e.x, e.y, 0, 0, 0.35, 30, '#ffd28a', 'ring');
@@ -2162,9 +2383,14 @@ export class Game {
           if (other !== e && !other.dead && other.spawn <= 0) {
             const od = Math.hypot(other.x - e.x, other.y - e.y);
             if (od < 90 + other.r) {
-              other.hp -= dmg * 0.6;
-              other.flash = 0.6;
-              if (other.hp <= 0) this.killEnemy(other, dmg * 0.6);
+              const dx = other.x - e.x;
+              const dy = other.y - e.y;
+              const d = Math.hypot(dx, dy) || 1;
+              this.damageEnemy(other, dmg * 0.6, dx / d, dy / d, false, 0, {
+                pierceShield: true,
+                triggerHitEffects: false,
+                applyModifiers: false,
+              });
             }
           }
         }
@@ -2182,9 +2408,14 @@ export class Game {
             const prog = s / 4;
             this.part(tx + (cf.x - tx) * prog + rand(-8, 8), ty + (cf.y - ty) * prog + rand(-8, 8), 0, 0, 0.2, 2.5, '#6ef3ff', 'spark');
           }
-          cf.hp -= dmg * 0.45;
-          cf.flash = 0.5;
-          if (cf.hp <= 0) this.killEnemy(cf, dmg * 0.45);
+          const dx = cf.x - tx;
+          const dy = cf.y - ty;
+          const d = Math.hypot(dx, dy) || 1;
+          this.damageEnemy(cf, dmg * 0.45, dx / d, dy / d, false, 0, {
+            pierceShield: true,
+            triggerHitEffects: false,
+            applyModifiers: false,
+          });
           tx = cf.x;
           ty = cf.y;
         }
@@ -2199,6 +2430,8 @@ export class Game {
             x: e.x, y: e.y,
             vx: Math.cos(pa) * 340, vy: Math.sin(pa) * 340,
             r: 6, dmg: dmg * 0.5, life: 0.8, color: '#ffb7c9', from: 'p', pierce: 1,
+            triggerHitEffects: false,
+            applyModifiers: false,
           });
         }
       }
@@ -2210,12 +2443,21 @@ export class Game {
         for (const other of this.enemies) {
           if (other !== e && !other.dead && other.spawn <= 0) {
             if (Math.hypot(other.x - e.x, other.y - e.y) < 100 + other.r) {
-              other.hp -= dmg * 0.75;
-              other.flash = 0.8;
-              if (other.hp <= 0) this.killEnemy(other, dmg * 0.75);
+              const dx = other.x - e.x;
+              const dy = other.y - e.y;
+              const d = Math.hypot(dx, dy) || 1;
+              this.damageEnemy(other, dmg * 0.75, dx / d, dy / d, false, 0, {
+                pierceShield: true,
+                triggerHitEffects: false,
+                applyModifiers: false,
+              });
             }
           }
         }
+      }
+
+      if (crit && p.hasEvoStormSkySmite && this.classDef.id === 'stormwarden') {
+        this.lightningPillar(e.x, e.y, this.classDef.dmg * p.dmgMul * 0.45, e);
       }
 
       // Frenzy Momentum attack speed stacking
@@ -2225,19 +2467,198 @@ export class Game {
       }
     }
 
-    if (crit) {
-      this.sfx.play('crit');
-      this.shake(5);
-      this.hitstop = Math.max(this.hitstop, 0.055);
-    } else {
-      this.sfx.play('hit');
-      this.shake(2.2);
-      this.hitstop = Math.max(this.hitstop, 0.03);
+    if (feedback) {
+      if (crit) {
+        this.sfx.play('crit');
+        this.shake(5);
+        this.hitstop = Math.max(this.hitstop, 0.055);
+      } else {
+        this.sfx.play('hit');
+        this.shake(2.2);
+        this.hitstop = Math.max(this.hitstop, 0.03);
+      }
     }
-    if (e.hp <= 0) this.killEnemy(e, dmg);
+    if (e.hp <= 0) this.killEnemy(e, dmg, crit, triggerHitEffects);
+    return dmg;
   }
 
-  private killEnemy(e: Enemy, _lastHit: number) {
+  private ignite(e: Enemy, hitDamage: number) {
+    if (e.dead || e.spawn > 0) return;
+    const referenceDamage = this.classDef.dmg * (this.p?.dmgMul ?? 1);
+    const freshIgnition = !e.burning;
+    e.burning = applyBurnStatus(e.burning, hitDamage, referenceDamage, e.kind === 'boss');
+    if (freshIgnition) this.part(e.x, e.y - e.r, 0, -24, 0.35, 3, '#ffb454', 'spark');
+  }
+
+  private lightningPillar(x: number, y: number, damage: number, exclude: Enemy | null = null) {
+    this.part(x, y, 0, 0, 0.35, 58, '#fff6a8', 'ring');
+    this.part(x, y, 0, 0, 0.45, 28, '#6ef3ff', 'ring');
+    this.burst(x, y, '#bff6ff', 10, 260, 'spark');
+    for (const e of this.enemies) {
+      if (e === exclude || e.dead || e.spawn > 0 || Math.hypot(e.x - x, e.y - y) > 48 + e.r) continue;
+      const dx = e.x - x;
+      const dy = e.y - y;
+      const d = Math.hypot(dx, dy) || 1;
+      this.damageEnemy(e, damage, dx / d, dy / d, false, 0, {
+        pierceShield: true,
+        triggerHitEffects: false,
+      });
+    }
+  }
+
+  private glacierSpikes(x: number, y: number, damage: number) {
+    const p = this.p;
+    if (!p || p.glacierSpikeCd > 0) return;
+    p.glacierSpikeCd = 0.28;
+    this.part(x, y, 0, 0, 0.45, 72, '#cfeeff', 'ring');
+    this.burst(x, y, '#9be8ff', 12, 220, 'shard');
+    for (const e of this.enemies) {
+      if (e.dead || e.spawn > 0 || Math.hypot(e.x - x, e.y - y) > 92 + e.r) continue;
+      e.slow = Math.max(e.slow, e.kind === 'boss' ? 0.6 : 1);
+      const dx = e.x - x;
+      const dy = e.y - y;
+      const d = Math.hypot(dx, dy) || 1;
+      this.damageEnemy(e, damage, dx / d, dy / d, false, 60, {
+        pierceShield: true,
+        triggerHitEffects: false,
+      });
+    }
+  }
+
+  private emitRunicThorns() {
+    const p = this.p;
+    if (!p || p.dead || p.hp <= 0 || p.runicThornsCd > 0 || !p.hasEvoRunicThorns || this.classDef.id !== 'shieldthane') return;
+    p.runicThornsCd = 0.65;
+    for (const angle of radialAngles(4, this.time)) {
+      this.shots.push({
+        x: p.x + Math.cos(angle) * 22,
+        y: p.y + Math.sin(angle) * 22,
+        vx: Math.cos(angle) * 330,
+        vy: Math.sin(angle) * 330,
+        r: 9,
+        dmg: this.classDef.dmg * p.dmgMul * 0.55,
+        life: 0.85,
+        color: '#cfeeff',
+        from: 'p',
+        pierce: 0,
+        triggerHitEffects: false,
+      });
+    }
+    this.part(p.x, p.y, 0, 0, 0.45, 50, '#9be8ff', 'ring');
+  }
+
+  private nearestEnemy(x: number, y: number): Enemy | null {
+    let closest: Enemy | null = null;
+    let closestDistanceSquared = Infinity;
+    for (const enemy of this.enemies) {
+      if (enemy.dead || enemy.spawn > 0) continue;
+      const dx = enemy.x - x;
+      const dy = enemy.y - y;
+      const distanceSquared = dx * dx + dy * dy;
+      if (distanceSquared < closestDistanceSquared) {
+        closest = enemy;
+        closestDistanceSquared = distanceSquared;
+      }
+    }
+    return closest;
+  }
+
+  private scheduleDelayedEffect(delay: number, run: () => void) {
+    this.delayedEffects.push({ remaining: delay, run });
+  }
+
+  private updateDelayedEffects(dt: number) {
+    const ready: DelayedEffect[] = [];
+    this.delayedEffects = this.delayedEffects.filter((effect) => {
+      effect.remaining -= dt;
+      if (effect.remaining <= 0) {
+        ready.push(effect);
+        return false;
+      }
+      return true;
+    });
+    for (let index = 0; index < ready.length; index++) {
+      if (this.state !== 'playing') {
+        this.delayedEffects.push(...ready.slice(index));
+        break;
+      }
+      ready[index].run();
+    }
+  }
+
+  private createVoidWell(x: number, y: number) {
+    this.voidWells.push({
+      x,
+      y,
+      remaining: LEGEND_MECHANICS.blackHoleDuration,
+      tick: LEGEND_MECHANICS.blackHoleTickInterval,
+    });
+    if (this.voidWells.length > 2) this.voidWells.shift();
+    this.part(x, y, 0, 0, LEGEND_MECHANICS.blackHoleDuration, LEGEND_MECHANICS.blackHoleRadius, '#b68cff', 'ring');
+    this.burst(x, y, '#e8d8ff', 12, 160, 'shard');
+  }
+
+  private updateVoidWells(dt: number) {
+    if (this.p?.stasisT && this.p.stasisT > 0) return;
+    const active: VoidWell[] = [];
+    for (const well of this.voidWells) {
+      well.remaining -= dt;
+      well.tick -= dt;
+      if (well.remaining <= 0) continue;
+
+      for (const e of this.enemies) {
+        if (e.dead || e.spawn > 0) continue;
+        const dx = well.x - e.x;
+        const dy = well.y - e.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (d >= LEGEND_MECHANICS.blackHoleRadius + e.r) continue;
+        const pull = e.kind === 'boss' ? 45 : 160;
+        e.vx += (dx / d) * pull * dt;
+        e.vy += (dy / d) * pull * dt;
+      }
+
+      if (well.tick <= 0) {
+        well.tick += LEGEND_MECHANICS.blackHoleTickInterval;
+        for (const e of this.enemies) {
+          if (e.dead || e.spawn > 0 || Math.hypot(e.x - well.x, e.y - well.y) >= LEGEND_MECHANICS.blackHoleRadius + e.r) continue;
+          const dx = e.x - well.x;
+          const dy = e.y - well.y;
+          const d = Math.hypot(dx, dy) || 1;
+          const bossScale = e.kind === 'boss' ? 0.5 : 1;
+          this.damageEnemy(
+            e,
+            this.classDef.dmg * (this.p?.dmgMul ?? 1) * LEGEND_MECHANICS.blackHoleDamageFraction * bossScale,
+            dx / d,
+            dy / d,
+            false,
+            0,
+            { pierceShield: true, triggerHitEffects: false },
+          );
+        }
+      }
+      active.push(well);
+    }
+    this.voidWells = active;
+  }
+
+  private updateGlassTrails(dt: number, frozenWorld: boolean) {
+    if (frozenWorld) return;
+    this.glassTrails = this.glassTrails.filter((trail) => {
+      trail.remaining -= dt;
+      trail.tick -= dt;
+      if (trail.remaining <= 0) return false;
+      if (trail.tick <= 0) {
+        trail.tick += 0.24;
+        for (const e of this.enemies) {
+          if (e.dead || e.spawn > 0 || Math.hypot(e.x - trail.x, e.y - trail.y) >= 24 + e.r) continue;
+          this.ignite(e, trail.damage);
+        }
+      }
+      return true;
+    });
+  }
+
+  private killEnemy(e: Enemy, _lastHit: number, crit = false, triggerHitEffects = true) {
     e.dead = true;
     const p = this.p!;
     const def = ENEMIES[e.kind];
@@ -2256,17 +2677,42 @@ export class Game {
     this.score += gained;
     this.floater(e.x, e.y - e.r - 24, `+${gained}`, 13, '#e2b45c');
 
+    if (triggerHitEffects && crit && p.hasEvoFifthSunBorn && this.classDef.id === 'jaguar') {
+      this.part(e.x, e.y, 0, 0, 0.55, 62, '#ffd24a', 'ring');
+      this.burst(e.x, e.y, '#ff9d3c', 16, 280, 'spark');
+      const sunDamage = this.classDef.dmg * p.dmgMul * 0.7;
+      for (const other of this.enemies) {
+        if (other === e || other.dead || other.spawn > 0) continue;
+        if (Math.hypot(other.x - e.x, other.y - e.y) > 90 + other.r) continue;
+        const dx = other.x - e.x;
+        const dy = other.y - e.y;
+        const d = Math.hypot(dx, dy) || 1;
+        this.damageEnemy(other, sunDamage, dx / d, dy / d, false, 40, {
+          pierceShield: true,
+          triggerHitEffects: false,
+        });
+      }
+    }
+
+    if (triggerHitEffects && p.hasEvoRiftUnwrittenVoid && this.classDef.id === 'riftblade') {
+      this.createVoidWell(e.x, e.y);
+    }
+
     // Terminal Detonation mechanical power
-    if (p.hasTerminalBlast) {
+    if (triggerHitEffects && p.hasTerminalBlast) {
       this.part(e.x, e.y, 0, 0, 0.45, 55, '#ff6b4a', 'ring');
       this.burst(e.x, e.y, '#ffd24a', 14, 280, 'spark');
       const blastDmg = this.classDef.dmg * p.dmgMul * 0.7;
       for (const other of this.enemies) {
         if (other !== e && !other.dead && other.spawn <= 0) {
           if (Math.hypot(other.x - e.x, other.y - e.y) < 110 + other.r) {
-            other.hp -= blastDmg;
-            other.flash = 0.7;
-            if (other.hp <= 0) this.killEnemy(other, blastDmg);
+            const dx = other.x - e.x;
+            const dy = other.y - e.y;
+            const d = Math.hypot(dx, dy) || 1;
+            this.damageEnemy(other, blastDmg, dx / d, dy / d, false, 0, {
+              pierceShield: true,
+              triggerHitEffects: false,
+            });
           }
         }
       }
@@ -2343,6 +2789,9 @@ export class Game {
   private damagePlayer(dmg: number, src: Enemy) {
     const p = this.p!;
     if (p.dead || p.iFrames > 0) return;
+    const reflectedDamage = p.hasEvoGlacierMaster && this.classDef.id === 'shieldthane'
+      ? dmg * 2
+      : this.classDef.dmg * p.dmgMul * 0.9;
     dmg *= 1 - p.armor;
     if (p.wardT > 0) {
       dmg *= 0.3;
@@ -2351,7 +2800,10 @@ export class Game {
         const dx = src.x - p.x;
         const dy = src.y - p.y;
         const d = Math.hypot(dx, dy) || 1;
-        this.damageEnemy(src, this.classDef.dmg * p.dmgMul * 0.9, dx / d, dy / d, false, 520);
+        this.damageEnemy(src, reflectedDamage, dx / d, dy / d, false, 520, {
+          pierceShield: true,
+          triggerHitEffects: false,
+        });
         this.burst(p.x + (dx / d) * 20, p.y + (dy / d) * 20, '#bfe6ff', 8, 220, 'shard');
       }
     }
@@ -2370,6 +2822,7 @@ export class Game {
     this.sfx.play('hurt');
     this.shake(9);
     this.hitstop = Math.max(this.hitstop, 0.05);
+    this.emitRunicThorns();
     if (p.hp <= 0) {
       p.hp = 0;
       p.dead = true;
@@ -2428,8 +2881,8 @@ export class Game {
           if (e.dead || e.spawn > 0) continue;
           const d = Math.hypot(e.x - p.x, e.y - p.y);
           if (d < 155 + e.r) {
-            const crit = Math.random() < this.critChance();
-            this.damageEnemy(e, dmgBase * 1.6 * (crit ? 2 : 1), (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), crit, 360, true);
+            const crit = this.rollCrit();
+            this.damageEnemy(e, dmgBase * 1.6, (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), crit, 360, true);
           }
         }
         break;
@@ -2445,8 +2898,8 @@ export class Game {
           const d = Math.hypot(e.x - p.x, e.y - p.y);
           if (d < 195 + e.r) {
             e.frozen = 2.2;
-            const crit = Math.random() < this.critChance();
-            this.damageEnemy(e, dmgBase * 1.4 * (crit ? 2 : 1), (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), crit, 260, true);
+            const crit = this.rollCrit();
+            this.damageEnemy(e, dmgBase * 1.4, (e.x - p.x) / (d || 1), (e.y - p.y) / (d || 1), crit, 260, true);
           }
         }
         break;
@@ -2454,8 +2907,8 @@ export class Game {
       case 'bolts': {
         this.sfx.play('bolts');
         this.shake(4);
-        for (let i = 0; i < 10; i++) {
-          const a = p.facing + (i / 10) * TAU;
+        const boltCount = bloodRiteProjectileCount(10, cls.id === 'jaguar' && p.hasEvoPyramidRite && p.riteT > 0);
+        for (const a of radialAngles(boltCount, p.facing)) {
           this.shots.push({
             x: p.x + Math.cos(a) * 24, y: p.y + Math.sin(a) * 24,
             vx: Math.cos(a) * 360, vy: Math.sin(a) * 360,
@@ -2488,7 +2941,7 @@ export class Game {
             e.slow = 1.6;
             e.vx += (dx / d) * 320;
             e.vy += (dy / d) * 320;
-            this.damageEnemy(e, dmgBase * 1.55, -dx / d, -dy / d, Math.random() < this.critChance(), 170, true);
+            this.damageEnemy(e, dmgBase * 1.55, -dx / d, -dy / d, this.rollCrit(), 170, true);
           }
         }
         break;
@@ -2517,7 +2970,10 @@ export class Game {
           }
           this.burst(e.x, e.y, '#6ef3ff', 10, 260, 'spark');
           e.slow = Math.max(e.slow, 1.0);
-          this.damageEnemy(e, dmg, dx / d, dy / d, Math.random() < this.critChance(), 200, true);
+          if (p.hasEvoStormSkySmite) {
+            this.lightningPillar(e.x, e.y, dmgBase * 0.35, e);
+          }
+          this.damageEnemy(e, dmg, dx / d, dy / d, this.rollCrit(), 200, true);
           lx = e.x;
           ly = e.y;
         });
@@ -2538,7 +2994,8 @@ export class Game {
           const d = Math.hypot(dx, dy) || 1;
           if (d < 260 + e.r) {
             e.slow = Math.max(e.slow, 2.0);
-            this.damageEnemy(e, dmgBase * 2.2, dx / d, dy / d, Math.random() < this.critChance(), 480, true);
+            this.damageEnemy(e, dmgBase * 2.2, dx / d, dy / d, this.rollCrit(), 480, true);
+            if (!e.dead) this.ignite(e, dmgBase * 2.2);
           }
         }
         break;
@@ -2567,7 +3024,7 @@ export class Game {
             const dx = e.x - p.x;
             const dy = e.y - p.y;
             const d = Math.hypot(dx, dy) || 1;
-            this.damageEnemy(e, dmgBase * 1.8, dx / d, dy / d, Math.random() < this.critChance(), 260, true);
+            this.damageEnemy(e, dmgBase * 1.8, dx / d, dy / d, this.rollCrit(), 260, true);
           }
         }
         break;
@@ -2596,6 +3053,25 @@ export class Game {
           const a = rand(0, TAU);
           this.part(p.x + Math.cos(a) * 30, p.y + Math.sin(a) * 30, Math.cos(a) * 40, Math.sin(a) * 40 - 60, rand(0.8, 1.4), rand(2, 4), '#dff4ff', 'dot', 40, 0.98);
         }
+        if (p.hasEvoRainCutter && cls.id === 'kensei') {
+          for (const a of radialAngles(8, p.facing)) {
+            this.shots.push({
+              x: p.x + Math.cos(a) * 24,
+              y: p.y + Math.sin(a) * 24,
+              vx: Math.cos(a) * 360,
+              vy: Math.sin(a) * 360,
+              r: 8,
+              dmg: dmgBase * 0.5,
+              life: 0.95,
+              color: '#ffb7c9',
+              from: 'p',
+              pierce: 1,
+              kind: 'crescent',
+            });
+          }
+          this.part(p.x, p.y, 0, 0, 0.55, 74, '#ffb7c9', 'ring');
+          this.part(p.x, p.y, 0, 0, 0.7, 126, '#dff4ff', 'ring');
+        }
         this.pushFeed('Still Water: the world slows around your blade.', cls.color);
         break;
       }
@@ -2623,11 +3099,29 @@ export class Game {
         this.floater(p.x, p.y - 30, `-${cost}`, 15, '#ff6b6b');
         this.burst(p.x, p.y, '#ff4d4d', 18, 240, 'dot');
         this.part(p.x, p.y, 0, 0, 0.8, 40, '#ffd24a', 'ring');
+        if (p.hasEvoPyramidRite && cls.id === 'jaguar') {
+          for (const a of radialAngles(8, p.facing)) {
+            this.shots.push({
+              x: p.x + Math.cos(a) * 26,
+              y: p.y + Math.sin(a) * 26,
+              vx: Math.cos(a) * 390,
+              vy: Math.sin(a) * 390,
+              r: 9,
+              dmg: dmgBase * 0.55,
+              life: 1.1,
+              color: '#ffd24a',
+              from: 'p',
+              pierce: 1,
+              kind: 'solar',
+            });
+          }
+          this.part(p.x, p.y, 0, 0, 0.7, 84, '#ffd24a', 'ring');
+        }
         this.pushFeed('Blood Rite: the sun repays blood with radiance.', cls.color);
         break;
       }
       case 'mirage': {
-        this.decoy = { x: p.x, y: p.y, t: 0, dur: 4 };
+        this.decoy = { x: p.x, y: p.y, t: 0, dur: 4, vortexT: 0 };
         this.sfx.play('mirage');
         this.burst(p.x, p.y, '#e6c26a', 22, 160, 'dot');
         p.iFrames = Math.max(p.iFrames, 0.4);
@@ -2640,6 +3134,26 @@ export class Game {
         this.shake(5);
         this.part(p.x, p.y, 0, 0, 0.8, 70, '#55d9e8', 'ring');
         this.part(p.x, p.y, 0, 0, 1.0, 110, '#d7a6ff', 'ring');
+        if (p.hasEvoTidePearlSurge && cls.id === 'tidecaller') {
+          p.pearlSurgeHeal = p.maxHp * 0.2;
+          for (const a of radialAngles(8, p.facing)) {
+            this.shots.push({
+              x: p.x + Math.cos(a) * 28,
+              y: p.y + Math.sin(a) * 28,
+              vx: Math.cos(a) * 380,
+              vy: Math.sin(a) * 380,
+              r: 10,
+              dmg: dmgBase * 0.55,
+              life: 1.2,
+              color: '#55d9e8',
+              from: 'p',
+              pierce: 99,
+              kind: 'trident',
+              pullsEnemies: true,
+              healOnHit: p.maxHp * 0.02,
+            });
+          }
+        }
         for (const e of this.enemies) {
           if (e.dead || e.spawn > 0) continue;
           const dx = e.x - p.x;
@@ -2656,8 +3170,8 @@ export class Game {
         break;
       }
       case 'stasis': {
-        p.stasisT = 2;
-        this.stasisHits = [];
+        p.stasisT = stasisDuration(p.hasEvoRiftStasisDoubler);
+        this.stasisHits = new Set();
         this.sfx.play('stasis');
         this.slowmoT = 0;
         this.part(p.x, p.y, 0, 0, 1.2, 80, '#b68cff', 'ring');
@@ -2678,6 +3192,7 @@ export class Game {
       case 'pyreheart': {
         p.pyreT = 6;
         p.pyreTick = 0;
+        p.pyreApparitionT = 0.65;
         this.sfx.play('pyreheart');
         this.shake(8);
         this.part(p.x, p.y, 0, 0, 0.9, 70, '#ff5a3c', 'ring');
@@ -2694,16 +3209,16 @@ export class Game {
     this.sfx.play('stasisEnd');
     this.shake(10);
     this.hitstop = Math.max(this.hitstop, 0.06);
-    const merged = new Map<Enemy, number>();
-    for (const h of this.stasisHits) merged.set(h.e, (merged.get(h.e) ?? 0) + h.dmg);
-    this.stasisHits = [];
-    for (const [e, dmg] of merged) {
+    const hitEnemies = this.stasisHits;
+    this.stasisHits = new Set();
+    for (const e of hitEnemies) {
       if (e.dead) continue;
       const dx = e.x - p.x;
       const dy = e.y - p.y;
       const d = Math.hypot(dx, dy) || 1;
       this.part(e.x, e.y, 0, 0, 0.5, e.r * 1.3, '#b68cff', 'ring');
-      this.damageEnemy(e, dmg, dx / d, dy / d, false, 200, true);
+      e.vx += (dx / d) * 200;
+      e.vy += (dy / d) * 200;
     }
   }
 
@@ -2791,6 +3306,7 @@ export class Game {
   private update(dt: number, raw: number) {
     const p = this.p!;
     this.elapsed += dt;
+    this.updateDelayedEffects(dt);
 
     // timers
     p.atkT -= dt;
@@ -2801,6 +3317,8 @@ export class Game {
     p.hurtT -= dt;
     p.slowT -= dt;
     p.comboT -= dt;
+    p.glacierSpikeCd = Math.max(0, p.glacierSpikeCd - dt);
+    p.runicThornsCd = Math.max(0, p.runicThornsCd - dt);
     if (p.comboT <= 0) p.combo = 0;
 
     // legacy timers
@@ -2864,13 +3382,20 @@ export class Game {
           const dx = e.x - p.x;
           const dy = e.y - p.y;
           const d = Math.hypot(dx, dy) || 1;
-          this.damageEnemy(e, dmgBase * 1.5, dx / d, dy / d, Math.random() < this.critChance(), 150, true);
+          this.damageEnemy(e, dmgBase * 1.5, dx / d, dy / d, this.rollCrit(), 150, true);
         }
       }
     }
     if (p.pyreT > 0) {
       p.pyreT -= dt;
       p.pyreTick -= dt;
+      if (p.hasEvoDrakeFirstFlameAvatar && this.classDef.id === 'drakewarden') {
+        p.pyreApparitionT -= dt;
+        if (p.pyreApparitionT <= 0) {
+          p.pyreApparitionT = 1.35;
+          this.fireDragonApparition();
+        }
+      }
       p.hp = Math.min(p.maxHp, p.hp + (p.maxHp * 0.03) * dt * 2);
       if (Math.random() < 0.5) {
         const a = rand(0, TAU);
@@ -2899,6 +3424,34 @@ export class Game {
         const a = rand(0, TAU);
         this.part(this.decoy.x + Math.cos(a) * 18, this.decoy.y + Math.sin(a) * 18, Math.cos(a) * 25, Math.sin(a) * 25 - 20, 0.6, rand(1.5, 3), '#e6c26a', 'dot', 30, 0.97);
       }
+      if (p.hasEvoSandVortex && this.classDef.id === 'sandseer') {
+        this.decoy.vortexT -= dt;
+        if (this.decoy.vortexT <= 0) {
+          this.decoy.vortexT = 0.8;
+          const target = this.nearestEnemy(this.decoy.x, this.decoy.y);
+          if (target) {
+            const aim = Math.atan2(target.y - this.decoy.y, target.x - this.decoy.x);
+            for (let i = 0; i < 2; i++) {
+              const angle = aim + (i === 0 ? -0.16 : 0.16);
+              this.shots.push({
+                x: this.decoy.x + Math.cos(angle) * 20,
+                y: this.decoy.y + Math.sin(angle) * 20,
+                vx: Math.cos(angle) * 360,
+                vy: Math.sin(angle) * 360,
+                r: 9,
+                dmg: this.classDef.dmg * p.dmgMul * 0.55,
+                life: 1.25,
+                color: '#e6c26a',
+                from: 'p',
+                pierce: 1,
+                kind: 'chakram',
+                homing: true,
+              });
+            }
+            this.part(this.decoy.x, this.decoy.y, 0, 0, 0.4, 34, '#e6c26a', 'ring');
+          }
+        }
+      }
       if (this.decoy.t >= this.decoy.dur) {
         const d0 = this.decoy;
         this.decoy = null;
@@ -2914,7 +3467,7 @@ export class Game {
           const d = Math.hypot(dx, dy) || 1;
           if (d < 150 + e.r) {
             e.slow = 1.2;
-            this.damageEnemy(e, dmgBase * 2.0, dx / d, dy / d, Math.random() < this.critChance(), 320, true);
+            this.damageEnemy(e, dmgBase * 2.0, dx / d, dy / d, this.rollCrit(), 320, true);
           }
         }
       }
@@ -2946,6 +3499,14 @@ export class Game {
       p.runT += dt * (Math.hypot(p.vx, p.vy) / p.speed);
     }
     p.aim = this.aimAssist();
+
+    if (p.hasEvoFifthSunBorn && this.classDef.id === 'jaguar') {
+      p.solarBarrageT -= dt;
+      if (p.solarBarrageT <= 0) {
+        p.solarBarrageT = 0.72;
+        this.fireSolarBarrage(p.x, p.y, p.aim, this.classDef.dmg * p.dmgMul * 0.38, 3);
+      }
+    }
 
     // actions
     if (this.dashQueued) {
@@ -3055,6 +3616,20 @@ export class Game {
       }
       // Heartbeat Stasis: the world is frozen, only the player moves
       if (p.stasisT > 0) continue;
+      if (e.burning) {
+        const tick = tickBurnStatus(e.burning, dt);
+        e.burning = tick.status;
+        if (tick.damage > 0) {
+          const dx = e.x - p.x;
+          const dy = e.y - p.y;
+          const distance = Math.hypot(dx, dy) || 1;
+          this.damageEnemy(e, tick.damage, dx / distance, dy / distance, false, 0, {
+            applyModifiers: false,
+            triggerHitEffects: false,
+          });
+          if (e.dead) continue;
+        }
+      }
       // Mirage Step: everyone hunts the decoy instead of the player
       const target = this.decoy ?? p;
       const dx = target.x - e.x;
@@ -3273,6 +3848,7 @@ export class Game {
                 shootT: 2, phase: 0, windT: 0, lungeT: 0,
                 minionT: 99, faceA: 0, telegraphed: false, launched: false, bossAttackWindup: false,
                 variant: 0, dashT: 0, role: null, roleT: 0, shieldFlash: 0, blinkX: 0, blinkY: 0,
+                burning: null,
                 dead: false,
               });
               this.burst(e.x + Math.cos(a) * 60, e.y + Math.sin(a) * 60, def.color, 6, 150, 'spark');
@@ -3495,6 +4071,8 @@ export class Game {
       }
     }
 
+    this.updateVoidWells(dt);
+
     // separation
     const es = this.enemies;
     for (let i = 0; i < es.length; i++) {
@@ -3520,12 +4098,43 @@ export class Game {
     const frozenWorld = !!p && !p.dead && p.stasisT > 0;
     for (const s of this.shots) {
       if (frozenWorld && s.from === 'e') continue;
+      const elapsedLife = s.maxLife !== undefined ? s.maxLife - s.life : 0;
+      const returning = !!s.returning && !!s.maxLife && elapsedLife > s.maxLife * 0.45;
+      if (returning && !s.returningNow) s.hitEnemies?.clear();
+      s.returningNow = returning;
+      if (s.from === 'p' && s.homing && !returning) {
+        const target = this.nearestEnemy(s.x, s.y);
+        if (target) {
+          const speed = Math.hypot(s.vx, s.vy) || 1;
+          const angle = turnToward(
+            Math.atan2(s.vy, s.vx),
+            Math.atan2(target.y - s.y, target.x - s.x),
+            dt * 5,
+          );
+          s.vx = Math.cos(angle) * speed;
+          s.vy = Math.sin(angle) * speed;
+        }
+      }
       s.x += s.vx * dt;
       s.y += s.vy * dt;
       s.life -= dt;
+      if (s.from === 'p' && s.glassTrail) {
+        s.trailT = (s.trailT ?? 0) - dt;
+        if (s.trailT <= 0) {
+          s.trailT = 0.18;
+          this.glassTrails.push({
+            x: s.x,
+            y: s.y,
+            remaining: 0.72,
+            tick: 0.24,
+            damage: this.classDef.dmg * (p?.dmgMul ?? 1) * 0.2,
+          });
+          if (this.glassTrails.length > 28) this.glassTrails.shift();
+          this.part(s.x, s.y, 0, 0, 0.45, 10, '#ffb454', 'ring');
+        }
+      }
       // Returning projectile behavior (Sand Chakram & Trident Boomerang)
       if (s.from === 'p' && s.returning && s.maxLife && s.startX !== undefined && s.startY !== undefined) {
-        const elapsedLife = s.maxLife - s.life;
         if (elapsedLife > s.maxLife * 0.45 && p && !p.dead) {
           // Accelerate back toward player
           const toPlayerX = p.x - s.x;
@@ -3555,18 +4164,40 @@ export class Game {
         for (const e of this.enemies) {
           if (e.dead || e.spawn > 0) continue;
           const d = Math.hypot(s.x - e.x, s.y - e.y);
-          if (d < s.r + e.r) {
+          if (d < s.r + e.r && claimProjectileHit(s.hitEnemies ??= new Set<Enemy>(), e)) {
             const knockForce = (p && p.hasKineticKnockback) ? 280 : 120;
-            this.damageEnemy(e, s.dmg, (s.vx || 1) / 360, (s.vy || 1) / 360, false, knockForce);
+            const crit = this.rollCrit();
+            const bossMultiplier = s.tidalWave && e.kind === 'boss' ? 1.25 : 1;
+            const appliedDamage = this.damageEnemy(
+              e,
+              s.dmg * bossMultiplier,
+              (s.vx || 1) / 360,
+              (s.vy || 1) / 360,
+              crit,
+              knockForce,
+              {
+                triggerHitEffects: s.triggerHitEffects !== false,
+                applyModifiers: s.applyModifiers !== false,
+              },
+            );
+
+            if (s.burning && !e.dead) this.ignite(e, appliedDamage);
+            if (s.glacierSpikes) this.glacierSpikes(e.x, e.y, s.dmg * 0.5);
+            if (s.healOnHit && p && p.pearlSurgeHeal > 0) {
+              const heal = Math.min(s.healOnHit, p.pearlSurgeHeal, p.maxHp - p.hp);
+              p.hp += heal;
+              p.pearlSurgeHeal = Math.max(0, p.pearlSurgeHeal - heal);
+            }
 
             // Pull enemies slightly toward tidal projectile path
             if (s.pullsEnemies) {
               const toShotX = s.x - e.x;
               const toShotY = s.y - e.y;
               const toDist = Math.hypot(toShotX, toShotY) || 1;
-              e.vx += (toShotX / toDist) * 140;
-              e.vy += (toShotY / toDist) * 140;
-              e.slow = Math.max(e.slow, 0.6);
+              const pullForce = s.tidalWave && e.kind === 'boss' ? 90 : s.tidalWave ? 210 : 140;
+              e.vx += (toShotX / toDist) * pullForce;
+              e.vy += (toShotY / toDist) * pullForce;
+              e.slow = Math.max(e.slow, s.tidalWave ? (e.kind === 'boss' ? 0.9 : 1.35) : 0.6);
             }
 
             // Ricochet Edge mechanical power: bounce to a second target
@@ -3594,6 +4225,7 @@ export class Game {
                     x: s.x, y: s.y,
                     vx: Math.cos(sa) * 320, vy: Math.sin(sa) * 320,
                     r: 6, dmg: s.dmg * 0.45, life: 0.6, color: '#e6c26a', from: 'p', pierce: 0,
+                    triggerHitEffects: false,
                   });
                 }
               }
@@ -3604,6 +4236,7 @@ export class Game {
         }
       }
     }
+    this.updateGlassTrails(dt, frozenWorld);
     this.shots = this.shots.filter((s) => s.life > 0 && s.x > -80 && s.x < ARENA_W + 80 && s.y > -80 && s.y < ARENA_H + 80);
 
     // pickups
@@ -3762,6 +4395,8 @@ export class Game {
     if (this.state === 'menu') {
       this.drawMenuRing(c);
     } else {
+      this.drawGlassTrails(c);
+      this.drawVoidWells(c);
       for (const pk of this.pickups) this.drawPickup(c, pk);
       for (const e of this.enemies) this.drawEnemy(c, e);
       this.drawPlayer(c);
@@ -4182,6 +4817,7 @@ export class Game {
     if (e.kind === 'boss') this.drawGlow(c, e.x, e.y, e.r * 1.9, bossCol, 0.35);
     if (e.kind === 'dragon') this.drawGlow(c, e.x, e.y, e.r * 1.6, '#ff9a2e', 0.25);
     if (e.kind === 'wraith') this.drawGlow(c, e.x, e.y, e.r * 1.5, '#b9a7ff', 0.3);
+    if (e.burning) this.drawGlow(c, e.x, e.y, e.r * 1.45, '#ff9a45', 0.2);
 
     c.translate(e.x, e.y);
     if (e.kind === 'boss' && e.spawn > 0) {
@@ -5371,6 +6007,40 @@ export class Game {
     }
   }
 
+  private drawGlassTrails(c: CanvasRenderingContext2D) {
+    for (const trail of this.glassTrails) {
+      const alpha = clamp(trail.remaining / 0.72, 0, 1) * 0.26;
+      c.fillStyle = `rgba(255,154,69,${alpha})`;
+      c.beginPath();
+      c.arc(trail.x, trail.y, 13, 0, TAU);
+      c.fill();
+      c.strokeStyle = `rgba(255,221,157,${alpha * 1.8})`;
+      c.lineWidth = 2;
+      c.beginPath();
+      c.arc(trail.x, trail.y, 9 + Math.sin(this.time * 12 + trail.x) * 2, 0, TAU);
+      c.stroke();
+    }
+  }
+
+  private drawVoidWells(c: CanvasRenderingContext2D) {
+    for (const well of this.voidWells) {
+      const pulse = 1 + Math.sin(this.time * 9 + well.x) * 0.08;
+      this.drawGlow(c, well.x, well.y, LEGEND_MECHANICS.blackHoleRadius * 0.8, '#b68cff', 0.32);
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      c.strokeStyle = 'rgba(232,216,255,0.65)';
+      c.lineWidth = 2.5;
+      c.beginPath();
+      c.ellipse(well.x, well.y, 25 * pulse, 13 / pulse, this.time * 2, 0, TAU);
+      c.stroke();
+      c.fillStyle = '#090611';
+      c.beginPath();
+      c.arc(well.x, well.y, 17 * pulse, 0, TAU);
+      c.fill();
+      c.restore();
+    }
+  }
+
   private drawPlayer(c: CanvasRenderingContext2D) {
     const p = this.p;
     if (!p) return;
@@ -5931,6 +6601,35 @@ export class Game {
       c.fillStyle = '#ffd24a';
       c.beginPath();
       c.arc(0, 0, s.r * 0.7, -Math.PI * 0.4, Math.PI * 0.4);
+      c.closePath();
+      c.fill();
+      c.restore();
+      return;
+    }
+
+    if (s.kind === 'dragon') {
+      c.save();
+      c.translate(s.x, s.y);
+      c.rotate(Math.atan2(s.vy, s.vx));
+      c.fillStyle = '#ff8b45';
+      c.beginPath();
+      c.moveTo(s.r, 0);
+      c.lineTo(-s.r * 0.8, -s.r * 0.48);
+      c.lineTo(-s.r * 0.35, 0);
+      c.lineTo(-s.r * 0.8, s.r * 0.48);
+      c.closePath();
+      c.fill();
+      c.fillStyle = '#ffd27a';
+      c.beginPath();
+      c.moveTo(-s.r * 0.15, -s.r * 0.2);
+      c.lineTo(-s.r * 0.8, -s.r);
+      c.lineTo(s.r * 0.38, -s.r * 0.35);
+      c.closePath();
+      c.fill();
+      c.beginPath();
+      c.moveTo(-s.r * 0.15, s.r * 0.2);
+      c.lineTo(-s.r * 0.8, s.r);
+      c.lineTo(s.r * 0.38, s.r * 0.35);
       c.closePath();
       c.fill();
       c.restore();
